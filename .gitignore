@@ -1,0 +1,7 @@
+Makefile
+*.tar.gz
+pm_to_blib
+blib/
+WWW-Mechanize-FireFox-*
+WWW-Mechanize-FireFox-*/
+.releaserc

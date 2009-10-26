@@ -1,0 +1,25 @@
+--- #YAML:1.0
+name:               WWW-Mechanize-FireFox
+version:            0.01
+abstract:           use FireFox as if it were WWW::Mechanize
+author:
+    - Max Maischein <corion@cpan.org>
+license:            unknown
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
+requires:
+    HTML::Selector::XPath:  0
+    HTTP::Response:       0
+    MozRepl::RemoteObject:  0.01
+    URI:                  0
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.50
+meta-spec:
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4
