@@ -8,7 +8,7 @@ use HTTP::Response;
 use HTML::Selector::XPath 'selector_to_xpath';
 
 use vars '$VERSION';
-$VERSION = '0.01';
+$VERSION = '0.02';
 
 =head1 NAME
 
@@ -19,6 +19,12 @@ WWW::Mechanize::FireFox - use FireFox as if it were WWW::Mechanize
   use WWW::Mechanize::FireFox;
   my $mech = WWW::Mechanize::FireFox->new();
   $mech->get('http://google.com');
+
+This will let you automate FireFox through the
+Mozrepl plugin, which you need to have installed
+in your FireFox.
+
+=head1 METHODS
 
 =cut
 
@@ -81,7 +87,6 @@ sub new {
         $args{ tab } = $args{ tab }->{tab};
     } else {
         $args{ tab } = $class->addTab( repl => $args{ repl });
-        #$args{ tab }->__release_action('');
         my $body = $args{ tab }->__dive(qw[ linkedBrowser contentWindow document body ]);
         $body->{innerHTML} = __PACKAGE__;
     }
@@ -669,15 +674,8 @@ Preferrably, there should be a common API between the two.
 
 =item *
 
-Use one of the CSS selectors-to-xpath translators
-to also allow CSS selectors instead of just XPath queries
-for locating elements.
-
-This should possibly be a generic Mechanize feature
-or Mechanize plugin instead of being specific to ::FireFox,
-but that can come later.
-
-Look at L<HTML::Selector::XPath>
+Spin off XPath queries and CSS selectors into
+their own Mechanize plugin.
 
 =back
 
@@ -687,8 +685,7 @@ Look at L<HTML::Selector::XPath>
 
 =item *
 
-Add configuration option through environment variable
-so the ip+port can be configured from the outside for the tests
+The MozRepl FireFox plugin at L<http://wiki.github.com/bard/mozrepl>
 
 =item *
 
