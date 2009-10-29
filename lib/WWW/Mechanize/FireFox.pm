@@ -8,9 +8,10 @@ use HTTP::Response;
 use HTML::Selector::XPath 'selector_to_xpath';
 use MIME::Base64;
 use WWW::Mechanize::Link;
+use Carp qw(croak);
 
 use vars qw'$VERSION %link_tags';
-$VERSION = '0.03';
+$VERSION = '0.04';
 
 =head1 NAME
 
@@ -70,11 +71,32 @@ sub execute {
     $repl->execute($js)
 }
 
+=head2 C<< $mech->new( ARGS ) >>
+
+Creates a new instance and connects it to Firefox.
+
+Note that Firefox already must be running and must have the C<mozrepl>
+extension installed.
+
+The following options are recognized:
+
+C<tab> - title of the tab to reuse. If no matching tab is found, the
+constructor dies.
+
+C<log> - array reference to log levels, passed through to L<MozRepl::RemoteObject>
+
+C<events> - the set of default Javascript events to listen for while
+waiting for a reply
+
+C<repl> - a premade L<MozRepl::RemoteObject> instance
+
+=cut
+
 sub new {
     my ($class, %args) = @_;
     my $loglevel = delete $args{ log } || [qw[ error ]];
     if (! $args{ repl }) {
-        $args{ repl } = MozRepl::RemoteObject->install_bridge();
+        $args{ repl } = MozRepl::RemoteObject->install_bridge(log => $loglevel);
     };
     
     if (my $tabname = delete $args{ tab }) {
@@ -91,7 +113,9 @@ sub new {
         my $body = $args{ tab }->__dive(qw[ linkedBrowser contentWindow document body ]);
         $body->{innerHTML} = __PACKAGE__;
     }
-    
+
+    $args{ events } ||= [qw[load error abort]];
+
     die "No tab found"
         unless $args{tab};
         
@@ -143,6 +167,18 @@ This method is special to WWW::Mechanize::FireFox.
 
 sub repl { $_[0]->{repl} };
 
+=head2 C<< $mech->events >>
+
+Sets or gets the set of Javascript events that WWW::Mechanize::FireFox
+will wait for after requesting a new page. Returns an array reference.
+
+This method is special to WWW::Mechanize::FireFox.
+
+=cut
+
+sub events { $_[0]->{events} = $_[1] if (@_ > 1); $_[0]->{events} };
+
+
 =head2 C<< $mech->get(URL) >>
 
 Retrieves the URL C<URL> into the tab.
@@ -160,10 +196,11 @@ sub get {
     my ($self,$url) = @_;
     my $b = $self->tab->{linkedBrowser};
 
-    my $event = $self->synchronize(['DOMContentLoaded','error'], sub { # ,'abort'
+    my $event = $self->synchronize($self->events, sub { # ,'abort'
         #'readystatechange'
         $b->loadURI($url);
     });
+    #warn $event->{js_event}->{type};
     
     # The event we get back is not necessarily indicative :-(
     # if ($event->{event} eq 'DOMContentLoaded') {
@@ -175,13 +212,14 @@ sub get {
 # Should this become part of MozRepl::RemoteObject?
 sub _addEventListener {
     my ($self,$browser,$events) = @_;
-    $events ||= "DOMFrameContentLoaded";
+    $events ||= $self->events;
     $events = [$events]
         unless ref $events;
 
     my $id = $browser->__id;
     
     my $rn = $self->repl->repl;
+# This registers multiple events for a one-shot event
     my $make_semaphore = $self->repl->declare(<<'JS');
 function(browser,events) {
     var lock = {};
@@ -195,8 +233,8 @@ function(browser,events) {
                 lock.busy++;
                 lock.event = evname;
                 lock.js_event = {};
-                // Copy the original JS event
-                lock.js_event.target = e.target;
+                //alert(evname);
+                lock.js_event.target = e.originalTarget;
                 lock.js_event.type = e.type;
                 for( var j = 0; j < listeners.length; j++) {
                     b.removeEventListener(listeners[j][0],listeners[j][1],true);
@@ -215,7 +253,6 @@ JS
 sub _wait_while_busy {
     my ($self,$element) = @_;
     # Now do the busy-wait
-    my $s;
     while ((my $s = $element->{busy} || 0) < 1) {
         sleep 0.1;
     };
@@ -245,15 +282,23 @@ the whole DOM and all C<iframe>s have been loaded.
 If your document doesn't have frames, use the C<DOMContentLoaded>
 event instead.
 
+If you leave out C<$event>, the value of C<< ->events() >> will
+be used instead.
+
 =cut
 
 sub synchronize {
     my ($self,$events,$callback) = @_;
+    if (ref $events and ref $events eq 'CODE') {
+        $callback = $events;
+        $events = $self->events;
+    };
     
     $events = [ $events ]
         unless ref $events;
     
-    my $b = $self->tab->{linkedBrowser};
+    #my $b = $self->tab->{linkedBrowser};
+    my $b = $self->tab;
     my $lock = $self->_addEventListener($b,$events);
     $callback->();
     $self->_wait_while_busy($lock);
@@ -309,7 +354,7 @@ sub update_html {
     my ($self,$content) = @_;
     my $data = encode_base64($content,'');
     my $url = qq{data:text/html;base64,$data};
-    $self->synchronize('load', sub {
+    $self->synchronize($self->events, sub {
         $self->tab->{linkedBrowser}->loadURI($url);
     });
 };
@@ -445,6 +490,104 @@ sub links {
         };
     } @links;
 };
+
+=head2 C<< $mech->click >>
+
+Has the effect of clicking a button on the current form. The first argument
+is the name of the button to be clicked. The second and third arguments
+(optional) allow you to specify the (x,y) coordinates of the click.
+
+If there is only one button on the form, $mech->click() with no arguments
+simply clicks that one button.
+
+Returns a L<HTTP::Response> object.
+
+=cut
+
+sub click {
+    my ($self,$name,$x,$y) = @_;
+    $name = quotemeta($name || '');
+    my @buttons = (
+                   $self->xpath(sprintf q{//button[@name="%s"]}, $name),
+                   $self->xpath(sprintf q{//input[(@type="button" or @type="submit") and @name="%s"]}, $name), 
+                   $self->xpath(q{//button}),
+                   $self->xpath(q{//input[(@type="button" or @type="submit")]}), 
+                  );
+    if (! @buttons) {
+        croak "No button matching '$name' found";
+    };
+    my $event = $self->synchronize($self->events, sub { # ,'abort'
+        $buttons[0]->__click();
+    });
+    return $self->response
+}
+
+=head2 C<< $mech->set_visible @values >>
+
+This method sets fields of the current form without having to know their
+names. So if you have a login screen that wants a username and password,
+you do not have to fetch the form and inspect the source (or use the
+C<mech-dump> utility, installed with L<WWW::Mechanize>) to see what
+the field names are; you can just say
+
+  $mech->set_visible( $username, $password );
+
+and the first and second fields will be set accordingly. The method is
+called set_visible because it acts only on visible fields;
+hidden form inputs are not considered. 
+
+The specifiers that are possible in WWW::Mechanize are not yet supported.
+
+=cut
+
+sub set_visible {
+    my ($self,@values) = @_;
+    my @visible_fields = $self->xpath(q{//input[@type != "hidden" and @type!= "button"]});
+    for my $idx (0..$#values) {
+        if ($idx > $#visible_fields) {
+            croak "Not enough fields on page";
+        }
+        $visible_fields[ $idx ]->{value} = $values[ $idx ];
+    }
+}
+
+=head2 C<< $mech->value NAME [, VALUE] [EVENTS] >>
+
+Sets the field with the name to the given value.
+Returns the value.
+
+Note that this uses the C<name> attribute of the HTML,
+not the C<id> attribute.
+
+By passing the array reference C<EVENTS>, you can indicate which
+Javascript events you want to be triggered after setting the value.
+By default, no Javascript events are triggered.
+
+=cut
+
+sub value {
+    my ($self,$name,$value,$events) = @_;
+    my @fields = $self->xpath(sprintf q{//input[@name="%s"]}, $name);
+    $events ||= [];
+    $events = [$events]
+        if (! ref $events);
+    croak "No field found for '$name'"
+        if (! @fields);
+    croak "Too many fields found for '$name'"
+        if (@fields > 1);
+    if (@_ == 3) {
+        $fields[0]->{value} = $value;
+        # Trigger the events
+        for my $ev (@$events) {
+            #warn "Testing '$ev' on '$name'";
+            if (my $fn = $fields[0]->{$ev}) {
+                #warn "Triggering '$ev' on '$name'";
+                $fn->($fields[0]);
+            };
+        };
+    }
+    $fields[0]->{value}
+}
 
 =head2 C<< $mech->clickables >>
 
