@@ -8,10 +8,11 @@ use HTTP::Response;
 use HTML::Selector::XPath 'selector_to_xpath';
 use MIME::Base64;
 use WWW::Mechanize::Link;
+use HTTP::Cookies::MozRepl;
 use Carp qw(croak);
 
 use vars qw'$VERSION %link_tags';
-$VERSION = '0.04';
+$VERSION = '0.05';
 
 =head1 NAME
 
@@ -114,7 +115,7 @@ sub new {
         $body->{innerHTML} = __PACKAGE__;
     }
 
-    $args{ events } ||= [qw[load error abort]];
+    $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded error abort stop]];
 
     die "No tab found"
         unless $args{tab};
@@ -196,14 +197,12 @@ sub get {
     my ($self,$url) = @_;
     my $b = $self->tab->{linkedBrowser};
 
-    my $event = $self->synchronize($self->events, sub { # ,'abort'
-        #'readystatechange'
+    my $event = $self->synchronize($self->events, sub {
         $b->loadURI($url);
     });
-    #warn $event->{js_event}->{type};
     
     # The event we get back is not necessarily indicative :-(
-    # if ($event->{event} eq 'DOMContentLoaded') {
+    # Let's just look at the kind of response we get back
     
     return $self->response
 };
@@ -216,9 +215,6 @@ sub _addEventListener {
     $events = [$events]
         unless ref $events;
 
-    my $id = $browser->__id;
-    
-    my $rn = $self->repl->repl;
 # This registers multiple events for a one-shot event
     my $make_semaphore = $self->repl->declare(<<'JS');
 function(browser,events) {
@@ -251,12 +247,16 @@ JS
 };
 
 sub _wait_while_busy {
-    my ($self,$element) = @_;
+    my ($self,@elements) = @_;
     # Now do the busy-wait
-    while ((my $s = $element->{busy} || 0) < 1) {
+    while (1) {
+        for my $element (@elements) {
+            if ((my $s = $element->{busy} || 0) >= 1) {
+                return $element;
+            };
+        };
         sleep 0.1;
     };
-    return $element;
 }
 
 =head2 C<< $mech->synchronize( $event, $callback ) >>
@@ -297,11 +297,12 @@ sub synchronize {
     $events = [ $events ]
         unless ref $events;
     
-    #my $b = $self->tab->{linkedBrowser};
-    my $b = $self->tab;
-    my $lock = $self->_addEventListener($b,$events);
+    # 'load' on linkedBrowser is good for successfull load
+    # 'error' on tab is good for failed load :-(
+    my $b = $self->tab->{linkedBrowser};
+    my $load_lock = $self->_addEventListener($b,$events);
     $callback->();
-    $self->_wait_while_busy($lock);
+    $self->_wait_while_busy($load_lock);
 };
 
 =head2 C<< $mech->document >>
@@ -645,6 +646,22 @@ sub selector {
     return $self->xpath($q);
 };
 
+=head2 C<< $mech->cookies >>
+
+Returns a L<HTTP::Cookies> object that was initialized
+from the live FireFox instance.
+
+B<Note:> C<< ->set_cookie >> is not yet implemented,
+as is saving the cookie jar.
+
+=cut
+
+sub cookies {
+    return HTTP::Cookies::MozRepl->new(
+        repl => $_[0]->repl
+    )
+}
+
 =head2 C<< $mech->highlight_node NODES >>
 
 Convenience method that marks all nodes in the arguments
@@ -676,6 +693,33 @@ sub highlight_node {
 1;
 
 __END__
+
+=head1 COOKIE HANDLING
+
+WWW::Mechanize::FireFox uses the same cookies that are
+stored in your browser. You can manipulate the cookies through
+the C<nsICookieManager> and C<nsICookieManager2> interfaces:
+
+    # Get cookie manager
+    my $cookie_manager = $mech->repl->expr(<<'JS');
+        Components.classes["@mozilla.org/cookiemanager;1"]
+                 .getService(Components.interfaces.nsICookieManager2)
+    JS
+
+    my $nsICookie = $mech->repl->expr(<<'JS');
+        Components.interfaces.nsICookie
+    JS
+
+    my $nsICookieManager2 = $mech->repl->expr(<<'JS');
+        Components.interfaces.nsICookieManager2
+    JS
+    $cookie_manager = $cookie_manager->QueryInterface($nsICookieManager);
+
+    # Remove 'session_id' relating to our host
+    $cookie_manager->remove($base->host, 'session_id', '/', undef);
+
+I welcome the lazyweb writing the appropriate L<HTTP::Cookies> adapter
+so you can use and manipulate your live FireFox cookies.
 
 =head1 INCOMPATIBILITIES WITH WWW::Mechanize
 

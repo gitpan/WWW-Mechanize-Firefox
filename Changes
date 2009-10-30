@@ -1,0 +1,21 @@
+0.05 20091030
+    . Added HTTP::Cookies::MozRepl to allow for live cookie querying
+    . Added ->cookies method for cookie access
+
+0.04 20091029
+    . Added ->set_visible
+    . Added ->value (partly buggy with respect to event triggering)
+    . added log passthrough parameter
+
+0.03 20091028
+    . Added missing MIME::Base64 prerequisite
+    . Now has WWW::Mechanize as a prerequisite
+    . Also requires MozRepl::RemoteObject 0.2 due to the changed call
+      interface and introduction of ->declare for caching.
+
+0.02 20091027
+    . rearranged documentation
+    . made tests skip if we can't connect to MozRepl
+
+0.01 20091026
+    . Released unto a propably suspecting audience
