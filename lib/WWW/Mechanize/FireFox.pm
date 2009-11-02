@@ -9,10 +9,10 @@ use HTML::Selector::XPath 'selector_to_xpath';
 use MIME::Base64;
 use WWW::Mechanize::Link;
 use HTTP::Cookies::MozRepl;
-use Carp qw(croak);
+use Carp qw(carp croak);
 
-use vars qw'$VERSION %link_tags';
-$VERSION = '0.05';
+use vars qw'$VERSION %link_spec';
+$VERSION = '0.06';
 
 =head1 NAME
 
@@ -81,8 +81,8 @@ extension installed.
 
 The following options are recognized:
 
-C<tab> - title of the tab to reuse. If no matching tab is found, the
-constructor dies.
+C<tab> - regex for the title of the tab to reuse. If no matching tab is
+found, the constructor dies.
 
 C<log> - array reference to log levels, passed through to L<MozRepl::RemoteObject>
 
@@ -90,6 +90,12 @@ C<events> - the set of default Javascript events to listen for while
 waiting for a reply
 
 C<repl> - a premade L<MozRepl::RemoteObject> instance
+
+C<pre_events> - the events that are sent to an input field before its
+value is changed. By default this is C<[focus]>.
+
+C<post_events> - the events that are sent to an input field after its
+value is changed. By default this is C<[blur, change]>.
 
 =cut
 
@@ -110,12 +116,15 @@ sub new {
         }
         $args{ tab } = $args{ tab }->{tab};
     } else {
-        $args{ tab } = $class->addTab( repl => $args{ repl });
+        my @autoclose = exists $args{ autoclose } ? (autoclose => $args{ autoclose }) : ();
+        $args{ tab } = $class->addTab( repl => $args{ repl }, @autoclose );
         my $body = $args{ tab }->__dive(qw[ linkedBrowser contentWindow document body ]);
         $body->{innerHTML} = __PACKAGE__;
     }
 
     $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded error abort stop]];
+    $args{ pre_value } ||= ['focus'];
+    $args{ post_value } ||= ['change','blur'];
 
     die "No tab found"
         unless $args{tab};
@@ -318,6 +327,17 @@ sub document {
     $self->tab->__dive(qw[linkedBrowser contentWindow document]);
 }
 
+=head2 C<< $mech->docshell >>
+
+Returns the C<docShell> Javascript object.
+
+=cut
+
+sub docshell {
+    my ($self) = @_;
+    $self->tab->__dive(qw[linkedBrowser docShell]);
+}
+
 =head2 C<< $mech->content >>
 
 Returns the current content of the tab as a scalar.
@@ -404,6 +424,61 @@ sub status {
     $_[0]->response->code
 };
 
+=head2 C<< $mech->reload BYPASS_CACHE >>
+
+Reloads the current page. If C<BYPASS_CACHE>
+is a true value, the browser is not allowed to
+use a cached page. This is the difference between
+pressing C<F5> (cached) and C<shift-F5> (uncached).
+
+Returns the (new) response.
+
+=cut
+
+sub reload {
+    my ($self, $bypass_cache) = @_;
+    $bypass_cache ||= 0;
+    if ($bypass_cache) {
+        $bypass_cache = $self->repl->expr('nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE');
+    };
+    $self->synchronize( sub {
+        $self->tab->{linkedBrowser}->reloadWithFlags($bypass_cache);
+    });
+    $self->response
+}
+
+=head2 C<< $mech->back >>
+
+Goes one page back in the page history.
+
+Returns the (new) response.
+
+=cut
+
+sub back {
+    my ($self) = @_;
+    $self->synchronize( sub {
+        $self->tab->{linkedBrowser}->goBack;
+    });
+    $self->response
+}
+
+=head2 C<< $mech->forward >>
+
+Goes one page back in the page history.
+
+Returns the (new) response.
+
+=cut
+
+sub forward {
+    my ($self) = @_;
+    $self->synchronize( sub {
+        $self->tab->{linkedBrowser}->goForward;
+    });
+    $self->response
+}
+
 =head2 C<< $mech->uri >>
 
 Returns the current document URI.
@@ -417,6 +492,25 @@ sub uri {
         currentURI
         asciiSpec ]);
     return URI->new( $loc );
+};
+
+=head2 C<< $mech->base >>
+
+Returns the URL base for the current page.
+
+The base is either specified through a C<base>
+tag or is the current URL.
+
+This method is specific to WWW::Mechanize::FireFox
+
+=cut
+
+sub base {
+    my ($self) = @_;
+    (my $base) = $self->selector('base');
+    $base = $base->{href}
+        if $base;
+    $base ||= $self->uri;
 };
 
 =head2 C<< $mech->content_type >>
@@ -450,47 +544,216 @@ Returns all links in the document.
 
 Currently accepts no parameters.
 
-The objects are not yet as nice as L<WWW::Mechanize::Link>,
-but they try to come close.
-
 =cut
 
-%link_tags = (
-    a      => 'href',
-    area   => 'href',
-    frame  => 'src',
-    iframe => 'src',
-    link   => 'href',
-    meta   => 'content',
+%link_spec = (
+    a      => { url => 'href', },
+    area   => { url => 'href', },
+    frame  => { url => 'src', },
+    iframe => { url => 'src', },
+    link   => { url => 'href', },
+    meta   => { url => 'content', xpath => q{translate(@http-equiv,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')="refresh"}, },
 );
+
+sub make_link {
+    my ($self,$node,$base) = @_;
+    my $tag = lc $node->{tagName};
+    
+    if (! exists $link_spec{ $tag }) {
+        warn "Unknown tag '$tag'";
+    };
+    my $url = $node->{ $link_spec{ $tag }->{url} };
+    
+    if ($tag eq 'meta') {
+        my $content = $url;
+        if ( $content =~ /^\d+\s*;\s*url\s*=\s*(\S+)/i ) {
+            $url = $1;
+            $url =~ s/^"(.+)"$/$1/ or $url =~ s/^'(.+)'$/$1/;
+        }
+        else {
+            undef $url;
+        }
+    };
+    
+    if (defined $url) {
+        $url = URI->new($url);
+        WWW::Mechanize::Link->new({
+            tag   => $tag,
+            name  => $node->{name},
+            base  => $base,
+            url   => $url,
+            text  => $node->{innerHTML},
+            attrs => {},
+        })
+    } else {
+        ()
+    };
+}
 
 sub links {
     my ($self) = @_;
-    my @links = $self->selector('a,area,frame,iframe,link,meta');
-    (my $base) = $self->selector('base');
-    $base = $base->{href}
-        if $base;
-    $base ||= $self->uri;
+    my @links = $self->selector( join ",", sort keys %link_spec);
+    my $base = $self->base;
     return map {
-        my $tag = lc $_->{tagName};
-        
-        my $loc = $_->{ $link_tags{ $tag }};
-        if (defined $loc) {
-            my $url = URI->new_abs($loc,$base);
-            WWW::Mechanize::Link->new({
-                node  => $_,
-                tag   =>  $tag,
-                name  => $_->{name},
-                base  => $base,
-                url   => $url,
-                text  => $_->{innerHTML},
-                attrs => {},
-            })
-        } else {
-            ()
-        };
+        $self->make_link($_,$base)
     } @links;
 };
+
+=head2 C<< $mech->find_link_dom OPTIONS >>
+
+A method to find links, like L<WWW::Mechanize>'s
+C<< ->find_links >> method.
+
+Returns the DOM object as L<MozRepl::RemoteObject>::Instance.
+
+The supported options are:
+
+C<< text >> - the text of the link
+
+C<< id >> - the C<id> attribute of the link
+
+C<< name >> - the C<name> attribute of the link
+
+C<< class >> - the C<class> attribute of the link
+
+C<< n >> - the (1-based) index. Defaults to returning the first link.
+
+C<< single >> - If true, ensure that only one element is found.
+
+The method C<croak>s if no link is found. If the C<single> option is true,
+it also C<croak>s when more than one link is found.
+
+=cut
+
+sub find_link_dom {
+    my ($self,%opts) = @_;
+    my $document = delete $opts{ document } || $self->document;
+    my $single = delete $opts{ single };
+    if ($single and exists $opts{ n }) {
+        croak "Cannot use 'single' and 'n' option together"
+    };
+    my $n = (delete $opts{ n } || 1);
+    $n--
+        if ($n ne 'all'); # 1-based indexing
+    my @spec;
+    if (my $p = delete $opts{ text }) {
+        push @spec, sprintf 'text() = "%s"', $p;
+    }
+    if (my $p = delete $opts{ id }) {
+        push @spec, sprintf '@id = "%s"', $p;
+    }
+    if (my $p = delete $opts{ name }) {
+        push @spec, sprintf '@name = "%s"', $p;
+    }
+    if (my $p = delete $opts{ class }) {
+        push @spec, sprintf '@class = "%s"', $p;
+    }
+    if (my $p = delete $opts{ url }) {
+        push @spec, sprintf '@href = "%s"', $p;
+    }
+    my @tags = (sort keys %link_spec);
+    if (my $p = delete $opts{ tag }) {
+        @tags = $p;
+    };
+    if (my $p = delete $opts{ tag_regex }) {
+        @tags = grep /$p/, @tags;
+    };
+    
+    my $q = join '|', 
+            map {
+                my @full = grep {defined} (@spec, $link_spec{$_}->{xpath});
+                if (@full) {
+                    sprintf "//%s[%s]", $_, join " and ", @full;
+                } else {
+                    sprintf "//%s", $_
+                };
+            }  (@tags);
+    
+    my @res = $document->__xpath($q);
+    
+    if (keys %opts) {
+        # post-filter the remaining links through WWW::Mechanize
+        # for all the options we don't support with XPath
+        
+        my $base = $self->base;
+        require WWW::Mechanize;
+        @res = grep { 
+            WWW::Mechanize::_match_any_link_parms($self->make_link($_,$base),\%opts) 
+        } @res;
+        #for (@res) {
+        #    warn "<$_->{tagName}>";
+        #};
+    };
+    
+    if ($single) {
+        if (0 == @res) { croak "No link found matching '$q'" };
+        if (1 <  @res) {
+            $self->highlight_node(@res);
+            croak sprintf "%d elements found found matching '%s'", scalar @res, $q;
+        };
+    };
+    
+    if ($n eq 'all') {
+        return @res
+    };
+    $res[$n]
+}
+
+=head2 C<< $mech->find_link OPTIONS >>
+
+A method quite similar to L<WWW::Mechanize>'s method.
+
+Returns a L<WWW::Mechanize::Link> object.
+
+=cut
+
+sub find_link {
+    my ($self,%opts) = @_;
+    my $base = $self->base;
+    if (my $link = $self->find_link_dom(%opts)) {
+        return $self->make_link($link, $base)
+    } else {
+        return
+    };
+};
+
+=head2 C<< $mech->find_all_links OPTIONS >>
+
+Finds all links in the document.
+
+Returns them as list or an array reference, depending
+on context.
+
+=cut
+
+sub find_all_links {
+    my ($self,%opts) = @_;
+    $opts{ n } = 'all';
+    my $base = $self->base;
+    my @matches = map {
+        $self->make_link($_, $base);
+    } $self->find_all_links_dom( %opts );
+    return @matches if wantarray;
+    return \@matches;
+};
+
+=head2 C<< $mech->find_all_links_dom OPTIONS >>
+
+Finds all matching linky DOM nodes in the document.
+
+Returns them as list or an array reference, depending
+on context.
+
+=cut
+
+sub find_all_links_dom {
+    my ($self,%opts) = @_;
+    $opts{ n } = 'all';
+    my @matches = $self->find_link_dom( %opts );
+    return @matches if wantarray;
+    return \@matches;
+};
+
 
 =head2 C<< $mech->click >>
 
@@ -523,6 +786,22 @@ sub click {
     return $self->response
 }
 
+=head2 C<< $mech->follow_link >>
+
+Follows the given link. Takes the same parameters that C<find_link>
+uses.
+
+=cut
+
+sub follow_link {
+    my ($self,%opts) = @_;
+    my $link = $self->find_link_dom(%opts);
+    $self->synchronize( sub {
+        $link->__click();
+    });
+    $self->response
+}
+
 =head2 C<< $mech->set_visible @values >>
 
 This method sets fields of the current form without having to know their
@@ -552,7 +831,7 @@ sub set_visible {
     }
 }
 
-=head2 C<< $mech->value NAME [, VALUE] [EVENTS] >>
+=head2 C<< $mech->value NAME [, VALUE] [,PRE EVENTS] [,POST EVENTS] >>
 
 Sets the field with the name to the given value.
 Returns the value.
@@ -560,31 +839,44 @@ Returns the value.
 Note that this uses the C<name> attribute of the HTML,
 not the C<id> attribute.
 
-By passing the array reference C<EVENTS>, you can indicate which
-Javascript events you want to be triggered after setting the value.
-By default, no Javascript events are triggered.
+By passing the array reference C<PRE EVENTS>, you can indicate which
+Javascript events you want to be triggered before setting the value.
+C<POST EVENTS> contains the evens you want to be triggered
+after setting the value.
+
+By default, the events set in the
+constructor for C<pre_events> and C<post_events>
+are triggered.
+
+=head3 Set a value without triggering events
+
+  $mech->value( 'myfield', 'myvalue', [], [] );
 
 =cut
 
 sub value {
-    my ($self,$name,$value,$events) = @_;
-    my @fields = $self->xpath(sprintf q{//input[@name="%s"]}, $name);
-    $events ||= [];
-    $events = [$events]
-        if (! ref $events);
+    my ($self,$name,$value,$pre,$post) = @_;
+    my @fields = $self->xpath(sprintf q{//input[@name="%s"] | //select[@name="%s"] | //textarea[@name="%s"]}, 
+                                          $name,              $name,                 $name);
+    $pre ||= $self->{pre_value};
+    $pre = [$pre]
+        if (! ref $pre);
+    $post ||= $self->{post_value};
+    $post = [$post]
+        if (! ref $pre);
     croak "No field found for '$name'"
         if (! @fields);
     croak "Too many fields found for '$name'"
         if (@fields > 1);
-    if (@_ == 3) {
+    if (@_ >= 3) {
+        for my $ev (@$pre) {
+            $fields[0]->__event($ev);
+        };
+
         $fields[0]->{value} = $value;
-        # Trigger the events
-        for my $ev (@$events) {
-            #warn "Testing '$ev' on '$name'";
-            if (my $fn = $fields[0]->{$ev}) {
-                #warn "Triggering '$ev' on '$name'";
-                $fn->($fields[0]);
-            };
+
+        for my $ev (@$post) {
+            $fields[0]->__event($ev);
         };
     }
     $fields[0]->{value}
@@ -628,7 +920,20 @@ L<WWW::Mechanize>.
 sub xpath {
     my ($self,$query,%options) = @_;
     $options{ node } ||= $self->document;
-    $self->document->__xpath($query, $options{ node });
+    my @res = $self->document->__xpath($query, $options{ node });
+    if ($options{single}) {
+        if (@res != 1) {
+            if (@res == 0) {
+                croak "No element found for '$query'";
+            } else {
+                $self->highlight_nodes(@res);
+                croak scalar @res . " elements found for '$query'";
+            }
+        };
+        return $res[0];
+    } else {
+        return @res
+    };
 };
 
 =head2 C<< $mech->selector css_selector, %options >>
@@ -643,7 +948,21 @@ L<WWW::Mechanize>.
 sub selector {
     my ($self,$query,%options) = @_;
     my $q = selector_to_xpath($query);
-    return $self->xpath($q);
+    
+    my @res = $self->xpath($q);
+    if ($options{single}) {
+        if (@res != 1) {
+            if (@res == 0) {
+                croak "No element found for '$query'";
+            } else {
+                $self->highlight_nodes(@res);
+                croak scalar(@res) . " elements found for '$query'";
+            }
+        };
+        return $res[0];
+    } else {
+        return @res
+    }
 };
 
 =head2 C<< $mech->cookies >>
@@ -661,6 +980,126 @@ sub cookies {
         repl => $_[0]->repl
     )
 }
+
+=head2 C<< $mech->content_as_png [TAB, COORDINATES] >>
+
+Returns the given tab or the current page rendered as PNG image.
+
+This is specific to WWW::Mechanize::FireFox.
+
+Currently, the data transfer between FireFox and Perl
+is done Base64-encoded. It would be beneficial to find what's
+necessary to make JSON handle binary data more gracefully.
+
+If the coordinates are given, that rectangle will be cut out.
+The coordinates should be a hash with the four usual entries,
+C<left>,C<top>,C<width>,C<height>.
+
+=head3 Save top left corner the current page as PNG
+
+  my $rect = {
+    left  =>    0,
+    top   =>    0,
+    width  => 200,
+    height => 200,
+  };
+  my $png = $mech->content_as_png(undef, $rect);
+  open my $fh, '>', 'page.png'
+      or die "Couldn't save to 'page.png': $!";
+  binmode $fh;
+  print {$fh} $png;
+  close $fh;
+
+=cut
+
+sub content_as_png {
+    my ($self, $tab, $rect) = @_;
+    $tab ||= $self->tab;
+    $rect ||= {};
+    
+    # Mostly taken from
+    # http://wiki.github.com/bard/mozrepl/interactor-screenshot-server
+    my $screenshot = $self->repl->declare(<<'JS');
+    function (tab,rect) {
+        var browserWindow = Cc['@mozilla.org/appshell/window-mediator;1']
+            .getService(Ci.nsIWindowMediator)
+            .getMostRecentWindow('navigator:browser');
+        var canvas = browserWindow
+               .document
+               .createElementNS('http://www.w3.org/1999/xhtml', 'canvas');
+        var browser = tab.linkedBrowser;
+        var win = browser.contentWindow;
+        var left = rect.left || 0;
+        var top = rect.top || 0;
+        var width = rect.width || win.document.width;
+        var height = rect.height || win.document.height;
+        canvas.width = width;
+        canvas.height = height;
+        var ctx = canvas.getContext('2d');
+        ctx.clearRect(0, 0, width, height);
+        ctx.save();
+        ctx.scale(1.0, 1.0);
+        ctx.drawWindow(win, left, top, width, height, 'rgb(255,255,255)');
+        ctx.restore();
+
+        //return atob(
+        return canvas
+               .toDataURL('image/png', '')
+               .split(',')[1]
+        // );
+    }
+JS
+    return decode_base64($screenshot->($tab, $rect))
+};
+
+=head2 C<< $mech->element_as_png $element >>
+
+Returns PNG image data for a single element
+
+=cut
+
+sub element_as_png {
+    my ($self, $element) = @_;
+    my $tab = $self->tab;
+
+    my $pos = $self->element_coordinates($element);
+    return $self->content_as_png($tab, $pos);
+};
+
+=head2 C<< $mech->element_coordinates $element >>
+
+Returns the page-coordinates of the C<$element>
+in pixels as a hash with four entries, C<left>, C<top>, C<width> and C<height>.
+
+This function might get moved into another module more geared
+towards rendering HTML.
+
+=cut
+
+sub element_coordinates {
+    my ($self, $element) = @_;
+    
+    # Mostly taken from
+    # http://www.quirksmode.org/js/findpos.html
+    my $findPos = $self->repl->declare(<<'JS');
+    function (obj) {
+        var res = { 
+            left: 0,
+            top: 0,
+            width: obj.scrollWidth,
+            height: obj.scrollHeight
+        };
+        if (obj.offsetParent) {
+            do {
+                res.left += obj.offsetLeft;
+                res.top += obj.offsetTop;
+            } while (obj = obj.offsetParent);
+        }
+        return res;
+    }
+JS
+    $findPos->($element);
+};
 
 =head2 C<< $mech->highlight_node NODES >>
 
@@ -690,36 +1129,59 @@ sub highlight_node {
     };
 };
 
+=head2 C<< $mech->allow OPTIONS >>
+
+Enables or disables browser features for the current tab.
+The following options are recognized:
+
+C<plugins> 	 - Whether to allow plugin execution.
+
+C<javascript> 	 - Whether to allow Javascript execution.
+
+C<metaredirects> - Attribute stating if refresh based redirects can be allowed.
+
+C<frames>, C<subframes> 	 - Attribute stating if it should allow subframes (framesets/iframes) or not.
+
+C<images> 	 - Attribute stating whether or not images should be loaded.
+
+Options not listed remain unchanged.
+
+=head3 Disable Javascript
+
+  $mech->allow( javascript => 0 );
+
+=cut
+
+use vars '%known_options';
+%known_options = (
+    'javascript'    => 'allowJavascript',
+    'plugins'       => 'allowPlugins',
+    'metaredirects' => 'allowMetaRedirects',
+    'subframes'     => 'allowSubframes',
+    'frames'        => 'allowSubframes',
+    'images'        => 'allowImages',
+);
+
+sub allow  {
+    my ($self,%options) = @_;
+    my $shell = $self->docshell;
+    for my $opt (sort keys %options) {
+        if (my $opt_js = $known_options{ $opt }) {
+            $shell->{$opt_js} = $options{ $opt };
+        } else {
+            carp "Unknown option '$opt_js' (ignored)";
+        };
+    };
+};
+
 1;
 
 __END__
 
 =head1 COOKIE HANDLING
 
-WWW::Mechanize::FireFox uses the same cookies that are
-stored in your browser. You can manipulate the cookies through
-the C<nsICookieManager> and C<nsICookieManager2> interfaces:
-
-    # Get cookie manager
-    my $cookie_manager = $mech->repl->expr(<<'JS');
-        Components.classes["@mozilla.org/cookiemanager;1"]
-                 .getService(Components.interfaces.nsICookieManager2)
-    JS
-
-    my $nsICookie = $mech->repl->expr(<<'JS');
-        Components.interfaces.nsICookie
-    JS
-
-    my $nsICookieManager2 = $mech->repl->expr(<<'JS');
-        Components.interfaces.nsICookieManager2
-    JS
-    $cookie_manager = $cookie_manager->QueryInterface($nsICookieManager);
-
-    # Remove 'session_id' relating to our host
-    $cookie_manager->remove($base->host, 'session_id', '/', undef);
-
-I welcome the lazyweb writing the appropriate L<HTTP::Cookies> adapter
-so you can use and manipulate your live FireFox cookies.
+FireFox cookies will be read through L<HTTP::Cookies::MozRepl>. This is
+relatively slow currently.
 
 =head1 INCOMPATIBILITIES WITH WWW::Mechanize
 
@@ -728,6 +1190,13 @@ there are many incompatibilities. The main thing is
 that only the most needed WWW::Mechanize methods
 have been implemented by me so far.
 
+=head2 Link attributes
+
+In FireFox, the C<name> attribute of links seems always
+to be present on links, even if it's empty. This is in
+difference to WWW::Mechanize, where the C<name> attribute
+can be C<undef>.
+
 =head2 Unsupported Methods
 
 =over 4
@@ -735,18 +1204,6 @@ have been implemented by me so far.
 =item *
 
 C<< ->put >>
-
-=item *
-
-C<< ->follow_link >>
-
-This is inconvenient and has high priority, for API compatibility.
-Normally, you will want to C<< ->__click() >> on elements you find
-instead.
-
-=item *
-
-C<< ->find_all_links >>
 
 =item *
 
@@ -802,10 +1259,6 @@ C<< ->select >>
 =item *
 
 C<< ->set_fields >>
-
-=item *
-
-C<< ->set_visible >>
 
 =item *
 
@@ -875,13 +1328,6 @@ Implement "reuse tab if exists, otherwise create new"
 
 =item *
 
-Spin off HTML::Display::MozRepl as soon as I find out how I can
-load an arbitrary document via MozRepl into a C<document>.
-
-This is mostly done, but not yet spun off.
-
-=item *
-
 Rip out parts of Test::HTML::Content and graft them
 onto the C<links()> and C<find_link()> methods here.
 FireFox is a conveniently unified XPath engine.
@@ -893,6 +1339,11 @@ Preferrably, there should be a common API between the two.
 Spin off XPath queries and CSS selectors into
 their own Mechanize plugin.
 
+=item *
+
+Implement C<element_to_png> to render single elements
+as PNG graphics.
+
 =back
 
 =head1 SEE ALSO
@@ -902,6 +1353,10 @@ their own Mechanize plugin.
 =item *
 
 The MozRepl FireFox plugin at L<http://wiki.github.com/bard/mozrepl>
+
+=item *
+
+L<WWW::Mechanize> - the module whose API grandfathered this module
 
 =item *
 
