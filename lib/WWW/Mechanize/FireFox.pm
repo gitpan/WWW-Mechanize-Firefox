@@ -12,7 +12,7 @@ use HTTP::Cookies::MozRepl;
 use Carp qw(carp croak);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.07';
+$VERSION = '0.08';
 
 =head1 NAME
 
@@ -23,6 +23,9 @@ WWW::Mechanize::FireFox - use FireFox as if it were WWW::Mechanize
   use WWW::Mechanize::FireFox;
   my $mech = WWW::Mechanize::FireFox->new();
   $mech->get('http://google.com');
+
+  $mech->eval_in_page('alert("Hello FireFox")');
+  my $png = $mech->content_as_png();
 
 This will let you automate FireFox through the
 Mozrepl plugin, which you need to have installed
@@ -1011,7 +1014,7 @@ If the coordinates are given, that rectangle will be cut out.
 The coordinates should be a hash with the four usual entries,
 C<left>,C<top>,C<width>,C<height>.
 
-=head3 Save top left corner the current page as PNG
+=head3 Save top left corner of the current page as PNG
 
   my $rect = {
     left  =>    0,
@@ -1190,6 +1193,62 @@ sub allow  {
     };
 };
 
+=head2 C<< $mech->js_errors [PAGE] >>
+
+An interface to the Javascript Error Console
+
+Returns the list of errors in the JEC
+
+=head3 Check that your Page has no Javascript compile errors
+
+  $mech->get('mypage');
+  my @errors = $mech->js_errors();
+  if (@errors) {
+      die "Found errors on page: @errors";
+  };
+
+Maybbe this should be called C<js_messages> or
+C<js_console_messages> instead.
+
+=cut
+
+sub js_console {
+    my ($self) = @_;
+    my $getConsoleService = $self->repl->declare(<<'JS');
+    function() {
+        return  Components.classes["@mozilla.org/consoleservice;1"]
+                .getService(Ci.nsIConsoleService);
+    }
+JS
+    $getConsoleService->()
+}
+
+sub js_errors {
+    my ($self,$page) = @_;
+    my $console = $self->js_console;
+    my $getErrorMessages = $self->repl->declare(<<'JS');
+    function (consoleService) {
+        var out = {};
+        consoleService.getMessageArray(out, {});
+        return out.value || []
+    };
+JS
+    my $m = $getErrorMessages->($console);
+    @$m
+}
+
+=head2 C<< $mech->clear_js_errors >>
+
+Clears all Javascript messages from the console
+
+=cut
+
+sub clear_js_errors {
+    my ($self,$page) = @_;
+    $self->js_console->reset;
+
+};
+
 =head2 C<< $mech->eval_in_page STR >>
 
 Evaluates the given Javascript fragment in the
@@ -1250,7 +1309,6 @@ sub unsafe_page_property_access {
     my $unsafe = $window->{wrappedJSObject};
     $unsafe->{$element}
 };
-
 
 1;
 
