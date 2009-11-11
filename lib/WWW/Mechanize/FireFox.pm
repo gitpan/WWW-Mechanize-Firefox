@@ -4,15 +4,18 @@ use Time::HiRes;
 
 use MozRepl::RemoteObject;
 use URI;
+use Cwd;
+use File::Basename;
 use HTTP::Response;
 use HTML::Selector::XPath 'selector_to_xpath';
 use MIME::Base64;
 use WWW::Mechanize::Link;
 use HTTP::Cookies::MozRepl;
+use Encode qw(encode);
 use Carp qw(carp croak);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.08';
+$VERSION = '0.09';
 
 =head1 NAME
 
@@ -219,6 +222,27 @@ sub get {
     return $self->response
 };
 
+=head2 C<< $mech->get_local $filename >>
+
+Shorthand method to construct the appropriate
+C<< file:// >> URI and load it into FireFox.
+
+This method is special to WWW::Mechanize::FireFox but could
+also exist in WWW::Mechanize through a plugin.
+
+=cut
+
+sub get_local {
+    my ($self, $htmlfile) = @_;
+    my $fn = File::Spec->rel2abs(
+                 File::Spec->catfile(dirname($0),$htmlfile),
+                 getcwd,
+             );
+    $fn =~ s!\\!/!g; # fakey "make file:// URL"
+
+    $self->get("file://$fn")
+}
+
 # Should I port this to Perl?
 # Should this become part of MozRepl::RemoteObject?
 sub _addEventListener {
@@ -241,7 +265,6 @@ function(browser,events) {
                 lock.busy++;
                 lock.event = evname;
                 lock.js_event = {};
-                //alert(evname);
                 lock.js_event.target = e.originalTarget;
                 lock.js_event.type = e.type;
                 for( var j = 0; j < listeners.length; j++) {
@@ -398,7 +421,9 @@ sub response {
     };   
 
     # We're cool!
-    return HTTP::Response->new(200,'',[],$self->content)
+    my $c = $self->content;
+    return HTTP::Response->new(200,'',[],encode 'UTF-8', $c)
+    #return HTTP::Response->new(200,'',[],$c)
 }
 *res = \&response;
 
@@ -1249,7 +1274,7 @@ sub clear_js_errors {
 
 };
 
-=head2 C<< $mech->eval_in_page STR >>
+=head2 C<< $mech->eval_in_page STR [, ENV] >>
 
 Evaluates the given Javascript fragment in the
 context of the web page.
@@ -1267,29 +1292,62 @@ structures like objects. When working with results from
 untrusted sources, you can only safely use simple
 types like C<string>.
 
+If you want to modify the environment the code is run under,
+pass in a hash reference as the second parameter. All keys
+will be inserted into the C<this> object as well as
+C<this.window>. Also, complex data structures are only
+supported if they contain no objects.
+If you need finer control, you'll have to
+write the Javascript yourself.
+
 This method is special to WWW::Mechanize::FireFox.
 
-Also, using this method opens a potential C<security risk>.
+Also, using this method opens a potential B<security risk>.
+
+=head3 Override the Javascript C<alert()> function
+
+  $mech->eval_in_page('alert("Hello");',
+      { alert => sub { print "Captured alert: '@_'\n" } }
+  );
 
 =cut
 
 sub eval_in_page {
-    my ($self,$str) = @_;
+    my ($self,$str,$env) = @_;
+    $env ||= {};
+    my $js_env = {};
+    
+    # do a manual transfer of keys, to circumvent our stupid
+    # transformation routine:
+    if (keys %$env) {
+        $js_env = $self->repl->declare(<<'JS')->();
+            function () { return new Object }
+JS
+        for my $k (keys %$env) {
+            $js_env->{$k} = $env->{$k};
+        };
+    };
+    
     my $eval_in_sandbox = $self->repl->declare(<<'JS');
-    function (uri,w,d,str) {
+    function (w,d,str,env) {
         var unsafeWin = w.wrappedJSObject;
         var safeWin = XPCNativeWrapper(unsafeWin);
         var sandbox = Components.utils.Sandbox(safeWin);
         sandbox.window = safeWin;
         sandbox.document = sandbox.window.document;
+        // Transfer the environment
+        for (var e in env) {
+            sandbox[e] = env[e]
+            sandbox.window[e] = env[e]
+        }
         sandbox.__proto__ = unsafeWin;
         var res = Components.utils.evalInSandbox(str, sandbox);
         return [res,typeof(res)];
     };
 JS
     my $window = $self->tab->{linkedBrowser}->{contentWindow};
-    my $uri = $self->uri;
-    return @{ $eval_in_sandbox->("$uri",$window,$self->document,$str) };
+    my $d = $self->document;
+    return @{ $eval_in_sandbox->($window,$d,$str,$js_env) };
 };
 
 =head2 C<< $mech->unsafe_page_property_access ELEMENT >>
