@@ -11,12 +11,12 @@ use HTML::Selector::XPath 'selector_to_xpath';
 use MIME::Base64;
 use WWW::Mechanize::Link;
 use HTTP::Cookies::MozRepl;
-use Scalar::Util 'blessed';
+use Scalar::Util qw'blessed weaken';
 use Encode qw(encode);
 use Carp qw(carp croak);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.10';
+$VERSION = '0.11';
 
 =head1 NAME
 
@@ -110,6 +110,20 @@ sub new {
         
     bless \%args, $class;
 };
+
+sub DESTROY {
+    my ($self) = @_;
+    #warn "Cleaning up mech";
+    local $@;
+    my $repl = delete $self->{ repl };
+    if ($repl) {
+        undef $self->{tab};
+        %$self = (); # wipe out all references we keep
+        # but keep $repl alive until we can dispose of it
+        # as the last thing, now:
+        $repl = undef;
+    };
+}
 
 =head1 JAVASCRIPT METHODS
 
@@ -339,13 +353,12 @@ sub addTab {
     }
 JS
     if (not exists $options{ autoclose } or $options{ autoclose }) {
+        #warn "Installing autoclose";
         #var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
         #                   .getService(Components.interfaces.nsIWindowMediator);
         #var win = wm.getMostRecentWindow('navigator:browser');
         #if (!win){win = window}
-        $tab->__release_action(<<'JS');
-window.getBrowser().removeTab(self)
-JS
+        $tab->__release_action('window.getBrowser().removeTab(self)');
     };
     
     $tab
@@ -398,6 +411,78 @@ This method is special to WWW::Mechanize::FireFox.
 =cut
 
 sub tab { $_[0]->{tab} };
+
+=head2 C<< $mech->progress_listener SOURCE, CALLBACKS >>
+
+Sets up the callbacks for the C<< nsIWebProgressListener >> interface
+to be the Perl subroutines you pass in.
+
+Returns a handle. Once the handle gets released, all callbacks will
+get stopped. Also, all Perl callbacks will get deregistered from the
+Javascript bridge, so make sure not to use the same callback
+in different progress listeners at the same time.
+
+=head3 Get notified when the current tab changes
+
+    my $browser = $mech->repl->expr('window.getBrowser()');
+
+    my $eventlistener = progress_listener(
+        $browser,
+        onLocationChange => \&onLocationChange,
+    );
+
+    while (1) {
+        $mech->repl->poll();
+        sleep 1;
+    };
+
+=cut
+
+sub progress_listener {
+    my ($mech,$source,%handlers) = @_;
+    my $NOTIFY_STATE_DOCUMENT = $mech->repl->expr('Components.interfaces.nsIWebProgress.NOTIFY_STATE_DOCUMENT');
+    my ($obj) = $mech->repl->expr('new Object');
+    for my $key (keys %handlers) {
+        $obj->{$key} = $handlers{$key};
+    };
+    
+    my $mk_nsIWebProgressListener = $mech->repl->declare(<<'JS');
+    function (myListener,source) {
+        myListener.source = source;
+        //const STATE_START = Components.interfaces.nsIWebProgressListener.STATE_START;
+        //const STATE_STOP = Components.interfaces.nsIWebProgressListener.STATE_STOP;
+        var callbacks = ['onStateChange',
+                       'onLocationChange',
+                       "onProgressChange",
+                       "onStatusChange",
+                       "onSecurityChange",
+                            ];
+        for (var h in callbacks) {
+            var e = callbacks[h];
+            if (! myListener[e]) {
+                myListener[e] = function(){}
+            };
+        };
+        myListener.QueryInterface = function(aIID) {
+            if (aIID.equals(Components.interfaces.nsIWebProgressListener) ||
+               aIID.equals(Components.interfaces.nsISupportsWeakReference) ||
+               aIID.equals(Components.interfaces.nsISupports))
+                return this;
+            throw Components.results.NS_NOINTERFACE;
+        };
+        return myListener
+    }
+JS
+    
+    my $lsn = $mk_nsIWebProgressListener->($obj,$source);
+    $lsn->__release_action('self.source.removeProgressListener(self)');
+    $lsn->__on_destroy(sub {
+        # Clean up some memory leaks
+        $_[0]->bridge->remove_callback(values %handlers);
+    });
+    $source->addProgressListener($lsn,$NOTIFY_STATE_DOCUMENT);
+    $lsn
+};
 
 =head2 C<< $mech->repl >>
 
@@ -574,7 +659,7 @@ pass an array reference as the first parameter.
 
 Usually, you want to use it like this:
 
-  my $l = $mech->xpath('//a[@onclick]');
+  my $l = $mech->xpath('//a[@onclick]', single => 1);
   $mech->synchronize('DOMFrameContentLoaded', sub {
       $l->__click()
   });
@@ -593,6 +678,51 @@ be used instead.
 
 =cut
 
+sub _install_response_header_listener {
+    my ($self) = @_;
+    
+    weaken $self;
+    
+    # These should be cached and optimized into one hash query
+    my $STATE_STOP = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_STOP');
+    my $STATE_IS_DOCUMENT = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT');
+    my $STATE_IS_WINDOW = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW');
+    my $nsIHttpChannel = $self->repl->expr('Components.interfaces.nsIHttpChannel');
+
+    my $state_change = sub {
+        my ($progress,$request,$flags,$status) = @_;
+        #printf "State     : <progress> <request> %08x %08x\n", $flags, $status;
+        #printf "                                 %08x\n", $STATE_STOP;
+        
+        if (($flags & ($STATE_STOP | $STATE_IS_DOCUMENT)) == ($STATE_STOP | $STATE_IS_DOCUMENT)) {
+            if ($status == 0) {
+                $self->{ response } = $request;
+            } else {
+                undef $self->{ response };
+            };
+            #if ($status) {
+            #    warn sprintf "%08x", $status;
+            #};
+        };
+    };
+    my $status_change = sub {
+        my ($progress,$request,$status,$msg) = @_;
+        #printf "Status     : <progress> <request> %08x %s\n", $status, $msg;
+        #printf "                                 %08x\n", $STATE_STOP;
+    };
+
+    my $browser = $self->tab->{linkedBrowser};
+
+    # These should mimick the LWP::UserAgent events maybe?
+    return $self->progress_listener(
+        $browser,
+        onStateChange => $state_change,
+        #onProgressChange => sub { print  "Progress  : @_\n" },
+        #onLocationChange => sub { printf "Location  : %s\n", $_[2]->{spec} },
+        #onStatusChange   => sub { print  "Status    : @_\n"; },
+    );
+};
+
 sub synchronize {
     my ($self,$events,$callback) = @_;
     if (ref $events and ref $events eq 'CODE') {
@@ -603,12 +733,16 @@ sub synchronize {
     $events = [ $events ]
         unless ref $events;
     
+    undef $self->{response};
+    my $response_catcher = $self->_install_response_header_listener();
+    
     # 'load' on linkedBrowser is good for successfull load
     # 'error' on tab is good for failed load :-(
     my $b = $self->tab->{linkedBrowser};
     my $load_lock = $self->_addEventListener($b,$events);
     $callback->();
     $self->_wait_while_busy($load_lock);
+    $self->{response}
 };
 
 =head2 C<< $mech->res >> / C<< $mech->response >>
@@ -617,9 +751,51 @@ Returns the current response as a L<HTTP::Response> object.
 
 =cut
 
+sub _headerVisitor {
+    my ($self,$cb) = @_;
+    my $obj = $self->repl->expr('new Object');
+    $obj->{visitHeader} = $cb;
+    $obj
+};
+
+sub _extract_response {
+    my ($self,$request) = @_;
+    
+    my $nsIChannel = $self->repl->expr('Components.interfaces.nsIChannel');
+    
+    #$request->{requestSucceeded};
+    
+    if (my $status = $request->{responseStatus}) {
+        my @headers;
+        my $v = $self->_headerVisitor(sub{push @headers, @_});
+        $request->visitResponseHeaders($v);
+        my $res = HTTP::Response->new(
+            $request->{responseStatus},
+            $request->{responseStatusText},
+            \@headers,
+            undef, # no body so far
+        );
+        return $res;
+    };
+};
+
 sub response {
     my ($self) = @_;
+    
+    # If we still have a valid JS response,
+    # create a HTTP::Response from that
+    if (my $js_res = $self->{ response }) {
+        #warn "JS response";
+        if ($js_res->{originalURI}->{scheme} =~ /^https?/) {
+            return $self->_extract_response( $js_res );
+        } else {
+            # make up a response, below
+        };
+    };
+    
+    # Otherwise, make up a reason:
     my $eff_url = $self->document->{documentURI};
+    #warn $eff_url;
     if ($eff_url =~ /^about:neterror/) {
         # this is an error
         return HTTP::Response->new(500)
@@ -628,7 +804,6 @@ sub response {
     # We're cool!
     my $c = $self->content;
     return HTTP::Response->new(200,'',[],encode 'UTF-8', $c)
-    #return HTTP::Response->new(200,'',[],$c)
 }
 *res = \&response;
 
@@ -642,14 +817,14 @@ This is a convenience function that wraps C<< $mech->res->is_success >>.
 =cut
 
 sub success {
-    $_[0]->response->is_success
+    my $res = $_[0]->response;
+    $res and $res->is_success
 }
 
 =head2 C<< $mech->status >>
 
-Returns the HTTP status code of the response. This is a 3-digit number like 200 for OK, 404 for not found, and so on.
-
-Currently can only return 200 (for OK) and 500 (for error)
+Returns the HTTP status code of the response.
+This is a 3-digit number like 200 for OK, 404 for not found, and so on.
 
 =cut
 
