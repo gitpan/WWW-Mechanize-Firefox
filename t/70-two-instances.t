@@ -1,12 +1,12 @@
 #!perl -w
 use strict;
 use Test::More;
-use WWW::Mechanize::FireFox;
+use WWW::Mechanize::Firefox;
 use URI::file;
 use Cwd;
 use File::Basename;
 
-my $mech = eval {WWW::Mechanize::FireFox->new( 
+my $mech = eval {WWW::Mechanize::Firefox->new( 
     autodie => 0,
     #log => [qw[debug]]
 )};
@@ -19,11 +19,11 @@ if (! $mech) {
     plan tests => 4;
 };
 
-isa_ok $mech, 'WWW::Mechanize::FireFox', "The first instance";
+isa_ok $mech, 'WWW::Mechanize::Firefox', "The first instance";
 
 my $second;
 my $res = eval {
-    $second = WWW::Mechanize::FireFox->new( 
+    $second = WWW::Mechanize::Firefox->new( 
             autodie => 0,
             #log => [qw[debug]]
     );
@@ -33,4 +33,4 @@ my $err = $@;
 ok $res, "We can get a second Mechanize instance";
 is $err, '', "No error was raised";
 
-isa_ok $second, 'WWW::Mechanize::FireFox', "The second instance";
+isa_ok $second, 'WWW::Mechanize::Firefox', "The second instance";

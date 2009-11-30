@@ -5,9 +5,9 @@ use Cwd;
 use URI::file;
 use File::Basename;
 use File::Spec;
-use WWW::Mechanize::FireFox;
+use WWW::Mechanize::Firefox;
 
-my $mech = eval { WWW::Mechanize::FireFox->new( 
+my $mech = eval { WWW::Mechanize::Firefox->new( 
     autodie => 0,
     #log => [qw[debug]]
 )};
@@ -20,7 +20,7 @@ if (! $mech) {
     plan tests => 19;
 };
 
-isa_ok $mech, 'WWW::Mechanize::FireFox';
+isa_ok $mech, 'WWW::Mechanize::Firefox';
 can_ok $mech, 'js_errors','clear_js_errors';
 
 sub load_file_ok {
@@ -39,9 +39,9 @@ load_file_ok('53-mech-capture-js-noerror.html', javascript => 0);
 my ($js_ok,$type) = eval { $mech->eval_in_page('js_ok') };
 if (! $js_ok) {
     SKIP: { skip "Couldn't get at 'js_ok' variable. Do you have a Javascript blocker enabled for file:// URLs?", 14; };
+    undef $mech;
     exit;
 };
-
 
 is_deeply [$mech->js_errors], [], "No errors reported on page";
 

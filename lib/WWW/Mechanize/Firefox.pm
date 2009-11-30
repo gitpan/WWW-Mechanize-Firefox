@@ -1,4 +1,4 @@
-package WWW::Mechanize::FireFox;
+package WWW::Mechanize::Firefox;
 use strict;
 use Time::HiRes;
 
@@ -14,26 +14,27 @@ use HTTP::Cookies::MozRepl;
 use Scalar::Util qw'blessed weaken';
 use Encode qw(encode);
 use Carp qw(carp croak);
+use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.11';
+$VERSION = '0.12';
 
 =head1 NAME
 
-WWW::Mechanize::FireFox - use FireFox as if it were WWW::Mechanize
+WWW::Mechanize::Firefox - use Firefox as if it were WWW::Mechanize
 
 =head1 SYNOPSIS
 
-  use WWW::Mechanize::FireFox;
-  my $mech = WWW::Mechanize::FireFox->new();
+  use WWW::Mechanize::Firefox;
+  my $mech = WWW::Mechanize::Firefox->new();
   $mech->get('http://google.com');
 
-  $mech->eval_in_page('alert("Hello FireFox")');
+  $mech->eval_in_page('alert("Hello Firefox")');
   my $png = $mech->content_as_png();
 
-This will let you automate FireFox through the
+This will let you automate Firefox through the
 Mozrepl plugin, which you need to have installed
-in your FireFox.
+in your Firefox.
 
 =head1 METHODS
 
@@ -57,21 +58,52 @@ extension installed.
 
 The following options are recognized:
 
+=over 4
+
+=item * 
+
 C<tab> - regex for the title of the tab to reuse. If no matching tab is
 found, the constructor dies.
 
+=item * 
+
+C<launch> - name of the program to launch if we can't connect to it on
+the first try.
+
+=item * 
+
 C<log> - array reference to log levels, passed through to L<MozRepl::RemoteObject>
+
+=item * 
 
 C<events> - the set of default Javascript events to listen for while
 waiting for a reply
 
+=item * 
+
 C<repl> - a premade L<MozRepl::RemoteObject> instance
+
+=item * 
 
 C<pre_events> - the events that are sent to an input field before its
 value is changed. By default this is C<[focus]>.
 
+=item * 
+
 C<post_events> - the events that are sent to an input field after its
 value is changed. By default this is C<[blur, change]>.
+
+=back
+
+=head3 Launch Firefox if C<mozrepl> is not running
+
+This will launch Firefox if the program can't connect to the
+C<mozrepl> plugin in Firefox. This will also enable C<mozrepl>
+in a Firefox process if it is not already running.
+
+  my $mech = WWW::Mechanize::Firefox->new(
+      launch => 'firefox',
+  );
 
 =cut
 
@@ -79,7 +111,11 @@ sub new {
     my ($class, %args) = @_;
     my $loglevel = delete $args{ log } || [qw[ error ]];
     if (! $args{ repl }) {
-        $args{ repl } = MozRepl::RemoteObject->install_bridge(log => $loglevel);
+        my $ff = delete $args{ launch };
+        $args{ repl } = MozRepl::RemoteObject->install_bridge(
+            launch => $ff,
+            log => $loglevel,
+        );
     };
     
     if (my $tabname = delete $args{ tab }) {
@@ -132,15 +168,29 @@ sub DESTROY {
 Enables or disables browser features for the current tab.
 The following options are recognized:
 
+=over 4
+
+=item * 
+
 C<plugins> 	 - Whether to allow plugin execution.
+
+=item * 
 
 C<javascript> 	 - Whether to allow Javascript execution.
 
+=item * 
+
 C<metaredirects> - Attribute stating if refresh based redirects can be allowed.
+
+=item * 
 
 C<frames>, C<subframes> 	 - Attribute stating if it should allow subframes (framesets/iframes) or not.
 
+=item * 
+
 C<images> 	 - Attribute stating whether or not images should be loaded.
+
+=back
 
 Options not listed remain unchanged.
 
@@ -254,11 +304,11 @@ supported if they contain no objects.
 If you need finer control, you'll have to
 write the Javascript yourself.
 
-This method is special to WWW::Mechanize::FireFox.
+This method is special to WWW::Mechanize::Firefox.
 
 Also, using this method opens a potential B<security risk> as
 the returned values can be objects and using these objects
-can execute malicious code in the context of the FireFox application.
+can execute malicious code in the context of the Firefox application.
 
 =head3 Override the Javascript C<alert()> function
 
@@ -354,18 +404,22 @@ sub addTab {
 JS
     if (not exists $options{ autoclose } or $options{ autoclose }) {
         #warn "Installing autoclose";
-        #var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-        #                   .getService(Components.interfaces.nsIWindowMediator);
-        #var win = wm.getMostRecentWindow('navigator:browser');
-        #if (!win){win = window}
-        $tab->__release_action('window.getBrowser().removeTab(self)');
+        my $release = join "",
+        q{var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]},
+        q{                   .getService(Components.interfaces.nsIWindowMediator);},
+        q{var win = wm.getMostRecentWindow('navigator:browser');},
+        q{if (!win){win = window};},
+        q{win.getBrowser().removeTab(self)},
+        ;
+        #warn $release;
+        $tab->__release_action($release);
     };
     
     $tab
 };
 
-# This should maybe become MozRepl::FireFox::Util?
-# or MozRepl::FireFox::UI ?
+# This should maybe become MozRepl::Firefox::Util?
+# or MozRepl::Firefox::UI ?
 sub openTabs {
     my ($self,$repl) = @_;
     $repl ||= $self->repl;
@@ -404,9 +458,9 @@ JS
 
 =head2 C<< $mech->tab >>
 
-Gets the object that represents the FireFox tab used by WWW::Mechanize::FireFox.
+Gets the object that represents the Firefox tab used by WWW::Mechanize::Firefox.
 
-This method is special to WWW::Mechanize::FireFox.
+This method is special to WWW::Mechanize::Firefox.
 
 =cut
 
@@ -488,7 +542,7 @@ JS
 
 Gets the L<MozRepl::RemoteObject> instance that is used.
 
-This method is special to WWW::Mechanize::FireFox.
+This method is special to WWW::Mechanize::Firefox.
 
 =cut
 
@@ -496,10 +550,10 @@ sub repl { $_[0]->{repl} };
 
 =head2 C<< $mech->events >>
 
-Sets or gets the set of Javascript events that WWW::Mechanize::FireFox
+Sets or gets the set of Javascript events that WWW::Mechanize::Firefox
 will wait for after requesting a new page. Returns an array reference.
 
-This method is special to WWW::Mechanize::FireFox.
+This method is special to WWW::Mechanize::Firefox.
 
 =cut
 
@@ -508,7 +562,7 @@ sub events { $_[0]->{events} = $_[1] if (@_ > 1); $_[0]->{events} };
 =head2 C<< $mech->cookies >>
 
 Returns a L<HTTP::Cookies> object that was initialized
-from the live FireFox instance.
+from the live Firefox instance.
 
 B<Note:> C<< ->set_cookie >> is not yet implemented,
 as is saving the cookie jar.
@@ -559,31 +613,23 @@ It returns a faked L<HTTP::Response> object for interface compatibility
 with L<WWW::Mechanize>. It does not yet support the additional parameters
 that L<WWW::Mechanize> supports for saving a file etc.
 
-Currently, the response will only have the status
-codes of 200 for a successful fetch and 500 for everything else.
-
 =cut
 
 sub get {
     my ($self,$url) = @_;
     my $b = $self->tab->{linkedBrowser};
 
-    my $event = $self->synchronize($self->events, sub {
+    $self->synchronize($self->events, sub {
         $b->loadURI($url);
     });
-    
-    # The event we get back is not necessarily indicative :-(
-    # Let's just look at the kind of response we get back
-    
-    return $self->response
 };
 
 =head2 C<< $mech->get_local $filename >>
 
 Shorthand method to construct the appropriate
-C<< file:// >> URI and load it into FireFox.
+C<< file:// >> URI and load it into Firefox.
 
-This method is special to WWW::Mechanize::FireFox but could
+This method is special to WWW::Mechanize::Firefox but could
 also exist in WWW::Mechanize through a plugin.
 
 =cut
@@ -668,7 +714,7 @@ It is necessary to synchronize with the browser whenever
 a click performs an action that takes longer and
 fires an event on the browser object.
 
-The C<DOMFrameContentLoaded> event is fired by FireFox when
+The C<DOMFrameContentLoaded> event is fired by Firefox when
 the whole DOM and all C<iframe>s have been loaded.
 If your document doesn't have frames, use the C<DOMContentLoaded>
 event instead.
@@ -734,7 +780,12 @@ sub synchronize {
         unless ref $events;
     
     undef $self->{response};
-    my $response_catcher = $self->_install_response_header_listener();
+    
+    my $need_response = defined wantarray;
+    my $response_catcher;
+    if ($need_response) {
+        $response_catcher = $self->_install_response_header_listener();
+    };
     
     # 'load' on linkedBrowser is good for successfull load
     # 'error' on tab is good for failed load :-(
@@ -742,7 +793,10 @@ sub synchronize {
     my $load_lock = $self->_addEventListener($b,$events);
     $callback->();
     $self->_wait_while_busy($load_lock);
-    $self->{response}
+    
+    if ($need_response) {
+        return $self->response
+    };
 };
 
 =head2 C<< $mech->res >> / C<< $mech->response >>
@@ -762,9 +816,7 @@ sub _extract_response {
     my ($self,$request) = @_;
     
     my $nsIChannel = $self->repl->expr('Components.interfaces.nsIChannel');
-    
-    #$request->{requestSucceeded};
-    
+    warn "Before status";
     if (my $status = $request->{responseStatus}) {
         my @headers;
         my $v = $self->_headerVisitor(sub{push @headers, @_});
@@ -785,8 +837,12 @@ sub response {
     # If we still have a valid JS response,
     # create a HTTP::Response from that
     if (my $js_res = $self->{ response }) {
-        #warn "JS response";
-        if ($js_res->{originalURI}->{scheme} =~ /^https?/) {
+        my $ouri = $js_res->{originalURI};
+        my $scheme;
+        if ($ouri) {
+            $scheme = $ouri->{scheme};
+        };
+        if ($scheme and $scheme =~ /^https?/) {
             return $self->_extract_response( $js_res );
         } else {
             # make up a response, below
@@ -852,7 +908,6 @@ sub reload {
     $self->synchronize( sub {
         $self->tab->{linkedBrowser}->reloadWithFlags($bypass_cache);
     });
-    $self->response
 }
 
 =head2 C<< $mech->back >>
@@ -868,7 +923,6 @@ sub back {
     $self->synchronize( sub {
         $self->tab->{linkedBrowser}->goBack;
     });
-    $self->response
 }
 
 =head2 C<< $mech->forward >>
@@ -884,7 +938,6 @@ sub forward {
     $self->synchronize( sub {
         $self->tab->{linkedBrowser}->goForward;
     });
-    $self->response
 }
 
 =head2 C<< $mech->uri >>
@@ -908,7 +961,7 @@ sub uri {
 
 Returns the DOM document object.
 
-This is WWW::Mechanize::FireFox specific.
+This is WWW::Mechanize::Firefox specific.
 
 =cut
 
@@ -921,7 +974,7 @@ sub document {
 
 Returns the C<docShell> Javascript object.
 
-This is WWW::Mechanize::FireFox specific.
+This is WWW::Mechanize::Firefox specific.
 
 =cut
 
@@ -972,6 +1025,171 @@ sub update_html {
     });
 };
 
+=head2 C<< $mech->save_content $localname [, $resource_directory] [, %OPTIONS ] >>
+
+Saves the given URL to the given filename. The URL will be
+fetched from the cache if possible, avoiding unnecessary network
+traffic.
+
+If C<$resource_directory> is given, the whole page will be saved.
+All CSS, subframes and images
+will be saved into that directory, while the page HTML itself will
+still be saved in the file pointed to by C<$localname>.
+
+Returns a C<<nsIWebBrowserPersist>> object through which you can cancel the
+download by calling its C<< ->cancelSave >> method. Also, you can poll
+the download status through the C<< ->{currentState} >> property.
+
+If you are interested in the intermediate download progress, create
+a ProgressListener through C<< $mech->progress_listener >>
+and pass it in the C<progress> option.
+
+The download will
+continue in the background. It will not show up in the
+Download Manager.
+
+=cut
+
+sub save_content {
+    my ($self,$localname,$resource_directory,%options) = @_;
+    
+    $localname = File::Spec->rel2abs($localname, '.');    
+    # Touch the file
+    if (! -f $localname) {
+    	open my $fh, '>', $localname
+    	    or die "Couldn't create '$localname': $!";
+    };
+
+    if ($resource_directory) {
+        $resource_directory = File::Spec->rel2abs($resource_directory, '.');
+
+        # Create the directory
+        if (! -d $resource_directory) {
+            mkdir $resource_directory
+                or die "Couldn't create '$resource_directory': $!";
+        };
+    };
+    
+    my $transfer_file = $self->repl->declare(<<'JS');
+function (document,filetarget,rscdir,progress) {
+    //new file object
+    var obj_target;
+    if (filetarget) {
+        obj_target = Components.classes["@mozilla.org/file/local;1"]
+        .createInstance(Components.interfaces.nsILocalFile);
+    };
+
+    //set file with path
+    obj_target.initWithPath(filetarget);
+
+    var obj_rscdir;
+    if (rscdir) {
+        obj_rscdir = Components.classes["@mozilla.org/file/local;1"]
+        .createInstance(Components.interfaces.nsILocalFile);
+        obj_rscdir.initWithPath(rscdir);
+    };
+
+    var obj_Persist = Components.classes["@mozilla.org/embedding/browser/nsWebBrowserPersist;1"]
+        .createInstance(Components.interfaces.nsIWebBrowserPersist);
+
+    // with persist flags if desired
+    const nsIWBP = Components.interfaces.nsIWebBrowserPersist;
+    const flags = nsIWBP.PERSIST_FLAGS_REPLACE_EXISTING_FILES;
+    obj_Persist.persistFlags = flags | nsIWBP.PERSIST_FLAGS_FROM_CACHE;
+    
+    obj_Persist.progressListener = progress;
+
+    //save file to target
+    obj_Persist.saveDocument(document,obj_target, obj_rscdir, null,0,0);
+    return obj_Persist
+};
+JS
+    #warn "=> $localname / $resource_directory";
+    $transfer_file->(
+        $self->document,
+        $localname,
+        $resource_directory,
+        $options{progress}
+    );
+}
+
+=head2 C<< $mech->save_url $url, $localname, [%OPTIONS] >>
+
+Saves the given URL to the given filename. The URL will be
+fetched from the cache if possible, avoiding unnecessary network
+traffic.
+
+Returns a C<<nsIWebBrowserPersist>> object through which you can cancel the
+download by calling its C<< ->cancelSave >> method. Also, you can poll
+the download status through the C<< ->{currentState} >> property.
+
+If you are interested in the intermediate download progress, create
+a ProgressListener through C<< $mech->progress_listener >>
+and pass it in the C<progress> option.
+
+The download will
+continue in the background. It will also not show up in the
+Download Manager.
+
+=head3 Upload a file to an C<ftp> server
+
+You can use C<< ->save_url >> to I<transfer> files. C<$localname>
+can be a local filename, a C<file://> URL or any other URL that allows
+uploads, like C<ftp://>.
+
+  $mech->save_url('file://path/to/my/file.txt'
+      => 'ftp://myserver.example/my/file.txt');
+
+B< Not implemented > - this requires instantiating and passing
+a C< nsIURI > object instead of a C< nsILocalFile >.
+
+=cut
+
+sub save_url {
+    my ($self,$url,$localname,%options) = @_;
+    
+    $localname = File::Spec->rel2abs($localname, '.');
+    
+    if (! -f $localname) {
+    	open my $fh, '>', $localname
+    	    or die "Couldn't create '$localname': $!";
+    };
+    
+    my $transfer_file = $self->repl->declare(<<'JS');
+function (source,filetarget,progress) {
+    //new obj_URI object
+    var obj_URI = Components.classes["@mozilla.org/network/io-service;1"]
+        .getService(Components.interfaces.nsIIOService).newURI(source, null, null);
+
+    //new file object
+    var obj_target;
+    if (filetarget) {
+        obj_target = Components.classes["@mozilla.org/file/local;1"]
+        .createInstance(Components.interfaces.nsILocalFile);
+    };
+
+    //set file with path
+    obj_target.initWithPath(filetarget);
+
+    //new persitence object
+    var obj_Persist = Components.classes["@mozilla.org/embedding/browser/nsWebBrowserPersist;1"]
+        .createInstance(Components.interfaces.nsIWebBrowserPersist);
+
+    // with persist flags if desired
+    const nsIWBP = Components.interfaces.nsIWebBrowserPersist;
+    const flags = nsIWBP.PERSIST_FLAGS_REPLACE_EXISTING_FILES;
+    obj_Persist.persistFlags = flags | nsIWBP.PERSIST_FLAGS_FROM_CACHE;
+    
+    obj_Persist.progressListener = progress;
+
+    //save file to target
+    obj_Persist.saveURI(obj_URI,null,null,null,null,obj_target);
+    return obj_Persist
+};
+JS
+    $transfer_file->("$url" => $localname, $options{progress});
+}
+
 =head2 C<< $mech->base >>
 
 Returns the URL base for the current page.
@@ -979,7 +1197,7 @@ Returns the URL base for the current page.
 The base is either specified through a C<base>
 tag or is the current URL.
 
-This method is specific to WWW::Mechanize::FireFox
+This method is specific to WWW::Mechanize::Firefox
 
 =cut
 
@@ -1043,7 +1261,9 @@ Currently accepts no parameters.
     frame  => { url => 'src', },
     iframe => { url => 'src', },
     link   => { url => 'href', },
-    meta   => { url => 'content', xpath => q{translate(@http-equiv,'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz')="refresh"}, },
+    meta   => { url => 'content', xpath => (join '',
+                    q{translate(@http-equiv,'ABCDEFGHIJKLMNOPQRSTUVWXYZ',},
+                    q{'abcdefghijklmnopqrstuvwxyz')="refresh"}), },
 );
 
 # taken from WWW::Mechanize. This should possibly just be reused there
@@ -1282,7 +1502,7 @@ sub find_all_links_dom {
 =head2 C<< $mech->click NAME [,X,Y] >>
 
 Has the effect of clicking a button on the current form. The first argument
-is the name of the button to be clicked. The second and third arguments
+is the C<name> of the button to be clicked. The second and third arguments
 (optional) allow you to specify the (x,y) coordinates of the click.
 
 If there is only one button on the form, $mech->click() with no arguments
@@ -1303,16 +1523,20 @@ the following keys are recognized:
 
 Returns a L<HTTP::Response> object.
 
+As a deviation from the WWW::Mechanize API, you can also pass a 
+hash reference as the first parameter. In it, you can specify
+the parameters to search much like for the C<find_link> calls.
+
 =cut
 
 sub click {
     my ($self,$name,$x,$y) = @_;
-    my %options = (
-        synchronize => 1,
-    );
+    my %options;
+    my $q;
     my @buttons;
     if (ref $name and blessed($name) and $name->can('__click')) {
-        @buttons = $name
+        $options{ dom } = $name;
+        $options{ synchronize } = 1;
     } elsif (ref $name eq 'HASH') { # options
         if (exists $name->{ dom }) {
             @buttons = delete $name->{dom};
@@ -1330,6 +1554,25 @@ sub click {
         };
         %options = (%options, %$name);
     } else {
+        $options{ name } = $name;
+        $options{ synchronize } = 1;
+    };
+    if (! exists $options{ synchronize }) {
+        $options{ synchronize } = 1;
+    };
+    
+    if ($options{ dom }) {
+        @buttons = $options{ dom };
+        $q = "DOM element";
+    } elsif (exists $options{ selector }) {
+        @buttons = $self->selector( $options{ selector } );
+        $q = "selector = '$options{ selector }'";
+    } elsif (exists $options{ xpath }) {
+        @buttons = $self->xpath( $options{ xpath } );
+        $q = "xpath = '$options{ xpath }'";
+    } elsif (exists $options{ name }) {
+        my $name = delete $options{ $name };
+        $q = "name = '$name'";
         $name = quotemeta($name || '');
         @buttons = (
                        $self->xpath(sprintf q{//button[@name="%s"]}, $name),
@@ -1337,10 +1580,20 @@ sub click {
                        $self->xpath(q{//button}),
                        $self->xpath(q{//input[(@type="button" or @type="submit")]}), 
                       );
-        if (! @buttons) {
+    };
+    if ($options{ one }) {
+        if (0 == @buttons) {
             $self->signal_condition(
                 "No button matching '$name' found"
             );
+        };
+        if ($options{ single }) {
+            if (1 <  @buttons) {
+                $self->highlight_node(@buttons);
+                $self->signal_condition(
+                    sprintf "%d buttons found found matching '%s'", scalar @buttons, $q
+                );
+            };
         };
     };
     
@@ -1351,7 +1604,10 @@ sub click {
     } else {
         $buttons[0]->__click();
     }
-    return $self->response
+
+    if (defined wantarray) {
+        return $self->response
+    };
 }
 
 =head2 C<< $mech->follow_link >>
@@ -1372,8 +1628,6 @@ sub follow_link {
     $self->synchronize( sub {
         $link->__click();
     });
-    
-    $self->response
 }
 
 =head1 FORM METHODS
@@ -1587,7 +1841,7 @@ sub clickables {
 
 =head2 C<< $mech->xpath QUERY, %options >>
 
-Runs an XPath query in FireFox against the current document.
+Runs an XPath query in Firefox against the current document.
 
 The options allow the following keys:
 
@@ -1637,7 +1891,7 @@ sub xpath {
         };
         if ($single) {
             if (@res > 1) {
-                $self->highlight_nodes(@res);
+                $self->highlight_node(@res);
                 $self->signal_condition( (scalar @res) . " elements found for $options{ user_info }" );
             }
         };
@@ -1669,9 +1923,9 @@ sub selector {
 
 Returns the given tab or the current page rendered as PNG image.
 
-This is specific to WWW::Mechanize::FireFox.
+This is specific to WWW::Mechanize::Firefox.
 
-Currently, the data transfer between FireFox and Perl
+Currently, the data transfer between Firefox and Perl
 is done Base64-encoded. It would be beneficial to find what's
 necessary to make JSON handle binary data more gracefully.
 
@@ -1791,7 +2045,7 @@ __END__
 
 =head1 COOKIE HANDLING
 
-FireFox cookies will be read through L<HTTP::Cookies::MozRepl>. This is
+Firefox cookies will be read through L<HTTP::Cookies::MozRepl>. This is
 relatively slow currently.
 
 =head1 INCOMPATIBILITIES WITH WWW::Mechanize
@@ -1803,7 +2057,7 @@ have been implemented by me so far.
 
 =head2 Link attributes
 
-In FireFox, the C<name> attribute of links seems always
+In Firefox, the C<name> attribute of links seems always
 to be present on links, even if it's empty. This is in
 difference to WWW::Mechanize, where the C<name> attribute
 can be C<undef>.
@@ -1877,7 +2131,7 @@ C<< ->submit >>
 =head2 Functions that will likely never be implemented
 
 These functions are unlikely to be implemented because
-they make little sense in the context of FireFox.
+they make little sense in the context of Firefox.
 
 =over 4
 
@@ -1925,6 +2179,11 @@ I have no use for it
 
 =item *
 
+Implement download progress via C<nsIWebBrowserPersist.progressListener>
+and our own C<nsIWebProgressListener>.
+
+=item *
+
 Make C<< ->click >> use C<< ->click_with_options >>
 
 =item *
@@ -1939,7 +2198,7 @@ Implement "reuse tab if exists, otherwise create new"
 
 Rip out parts of Test::HTML::Content and graft them
 onto the C<links()> and C<find_link()> methods here.
-FireFox is a conveniently unified XPath engine.
+Firefox is a conveniently unified XPath engine.
 
 Preferrably, there should be a common API between the two.
 
@@ -1956,7 +2215,7 @@ into their own Mechanize plugin(s).
 
 =item *
 
-The MozRepl FireFox plugin at L<http://wiki.github.com/bard/mozrepl>
+The MozRepl Firefox plugin at L<http://wiki.github.com/bard/mozrepl>
 
 =item *
 
@@ -1976,7 +2235,7 @@ for more tab info
 =head1 REPOSITORY
 
 The public repository of this module is 
-L<http://github.com/Corion/www-mechanize-firefox>.
+L<http://github.com/Corion/www-mechanize-Firefox>.
 
 =head1 AUTHOR
 
