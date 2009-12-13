@@ -17,7 +17,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.12';
+$VERSION = '0.13';
 
 =head1 NAME
 
@@ -64,6 +64,14 @@ The following options are recognized:
 
 C<tab> - regex for the title of the tab to reuse. If no matching tab is
 found, the constructor dies.
+
+If you pass in the string C<current>, the currently
+active tab will be used instead.
+
+=item *
+
+C<create> - will create a new tab if no existing tab matching
+the criteria given in C<tab> can be found.
 
 =item * 
 
@@ -120,19 +128,38 @@ sub new {
     
     if (my $tabname = delete $args{ tab }) {
         if (! ref $tabname) {
-            $tabname = qr/\Q$tabname/;
+            if ($tabname eq 'current') {
+                $args{ tab } = $class->selectedTab($args{ repl });
+            } else {
+                croak "Don't know what to do with tab '$tabname'. Did you mean qr{$tabname}?";
+            };
+        } else {
+            ($args{ tab }) = grep { $_->{title} =~ /$tabname/ } $class->openTabs($args{ repl });
+            if (! $args{ tab }) {
+                if (! delete $args{ create }) {
+                    croak "Couldn't find a tab matching /$tabname/";
+                } else {
+                    # fall through into tab creation
+                };
+            } else {
+                $args{ tab } = $args{ tab }->{tab};
+            };
         };
-        ($args{ tab }) = grep { $_->{title} =~ /$tabname/ } $class->openTabs($args{ repl });
-        if (! $args{ tab }) {
-            die "Couldn't find a tab matching /$tabname/";
-        }
-        $args{ tab } = $args{ tab }->{tab};
-    } else {
+    };
+    if (! $args{ tab }) {
         my @autoclose = exists $args{ autoclose } ? (autoclose => $args{ autoclose }) : ();
         $args{ tab } = $class->addTab( repl => $args{ repl }, @autoclose );
         my $body = $args{ tab }->__dive(qw[ linkedBrowser contentWindow document body ]);
         $body->{innerHTML} = __PACKAGE__;
-    }
+    };
+
+    if (delete $args{ autoclose }) {
+        $class->autoclose_tab($args{ tab });
+    };
+    
+    if (my $bufsize = delete $args{ bufsize }) {
+        $args{ repl }->repl->client->telnet->max_buffer_length($bufsize);
+    };
 
     $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded error abort stop]];
     $args{ pre_value } ||= ['focus'];
@@ -163,7 +190,7 @@ sub DESTROY {
 
 =head1 JAVASCRIPT METHODS
 
-=head2 C<< $mech->allow OPTIONS >>
+=head2 C<< $mech->allow( OPTIONS ) >>
 
 Enables or disables browser features for the current tab.
 The following options are recognized:
@@ -222,7 +249,7 @@ sub allow  {
     };
 };
 
-=head2 C<< $mech->js_errors [PAGE] >>
+=head2 C<< $mech->js_errors( [PAGE] ) >>
 
 An interface to the Javascript Error Console
 
@@ -278,7 +305,7 @@ sub clear_js_errors {
 
 };
 
-=head2 C<< $mech->eval_in_page STR [, ENV] >>
+=head2 C<< $mech->eval_in_page STR [, ENV] [, DOCUMENT] >>
 
 Evaluates the given Javascript fragment in the
 context of the web page.
@@ -319,9 +346,10 @@ can execute malicious code in the context of the Firefox application.
 =cut
 
 sub eval_in_page {
-    my ($self,$str,$env) = @_;
+    my ($self,$str,$env,$doc,$window) = @_;
     $env ||= {};
     my $js_env = {};
+    $doc ||= $self->document;
     
     # do a manual transfer of keys, to circumvent our stupid
     # transformation routine:
@@ -340,7 +368,7 @@ JS
         var safeWin = XPCNativeWrapper(unsafeWin);
         var sandbox = Components.utils.Sandbox(safeWin);
         sandbox.window = safeWin;
-        sandbox.document = sandbox.window.document;
+        sandbox.document = d; // sandbox.window.document;
         // Transfer the environment
         for (var e in env) {
             sandbox[e] = env[e]
@@ -351,12 +379,12 @@ JS
         return [res,typeof(res)];
     };
 JS
-    my $window = $self->tab->{linkedBrowser}->{contentWindow};
-    my $d = $self->document;
-    return @{ $eval_in_sandbox->($window,$d,$str,$js_env) };
+    $window ||= $self->tab->{linkedBrowser}->{contentWindow};
+    #my $window = $doc->{window}; # $self->tab->{linkedBrowser}->{contentWindow};
+    return @{ $eval_in_sandbox->($window,$doc,$str,$js_env) };
 };
 
-=head2 C<< $mech->unsafe_page_property_access ELEMENT >>
+=head2 C<< $mech->unsafe_page_property_access( ELEMENT ) >>
 
 Allows you unsafe access to properties of the current page. Using
 such properties is an incredibly bad idea.
@@ -403,23 +431,42 @@ sub addTab {
     }
 JS
     if (not exists $options{ autoclose } or $options{ autoclose }) {
-        #warn "Installing autoclose";
-        my $release = join "",
-        q{var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]},
-        q{                   .getService(Components.interfaces.nsIWindowMediator);},
-        q{var win = wm.getMostRecentWindow('navigator:browser');},
-        q{if (!win){win = window};},
-        q{win.getBrowser().removeTab(self)},
-        ;
-        #warn $release;
-        $tab->__release_action($release);
+        $self->autoclose_tab($tab)
     };
     
     $tab
 };
 
+sub autoclose_tab {
+    my ($self,$tab) = @_;
+    #warn "Installing autoclose";
+    my $release = join "",
+    q{var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]},
+    q{                   .getService(Components.interfaces.nsIWindowMediator);},
+    q{var win = wm.getMostRecentWindow('navigator:browser');},
+    q{if (!win){win = window};},
+    q{win.getBrowser().removeTab(self)},
+    ;
+    #warn $release;
+    $tab->__release_action($release);
+};
+
 # This should maybe become MozRepl::Firefox::Util?
 # or MozRepl::Firefox::UI ?
+sub selectedTab {
+    my ($self,$repl) = @_;
+    $repl ||= $self->repl;
+    my $selected_tab = $repl->declare(<<'JS');
+function() {
+    var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
+                       .getService(Components.interfaces.nsIWindowMediator);
+    var win = wm.getMostRecentWindow('navigator:browser');
+    return win.getBrowser().selectedTab
+}
+JS
+    return $selected_tab->();
+}
+
 sub openTabs {
     my ($self,$repl) = @_;
     $repl ||= $self->repl;
@@ -466,7 +513,7 @@ This method is special to WWW::Mechanize::Firefox.
 
 sub tab { $_[0]->{tab} };
 
-=head2 C<< $mech->progress_listener SOURCE, CALLBACKS >>
+=head2 C<< $mech->progress_listener( SOURCE, CALLBACKS ) >>
 
 Sets up the callbacks for the C<< nsIWebProgressListener >> interface
 to be the Perl subroutines you pass in.
@@ -575,7 +622,7 @@ sub cookies {
     )
 }
 
-=head2 C<< $mech->highlight_node NODES >>
+=head2 C<< $mech->highlight_node( NODES ) >>
 
 Convenience method that marks all nodes in the arguments
 with
@@ -605,7 +652,7 @@ sub highlight_node {
 
 =head1 NAVIGATION METHODS
 
-=head2 C<< $mech->get(URL) >>
+=head2 C<< $mech->get( URL ) >>
 
 Retrieves the URL C<URL> into the tab.
 
@@ -624,7 +671,7 @@ sub get {
     });
 };
 
-=head2 C<< $mech->get_local $filename >>
+=head2 C<< $mech->get_local( $filename ) >>
 
 Shorthand method to construct the appropriate
 C<< file:// >> URI and load it into Firefox.
@@ -814,9 +861,9 @@ sub _headerVisitor {
 
 sub _extract_response {
     my ($self,$request) = @_;
-    
     my $nsIChannel = $self->repl->expr('Components.interfaces.nsIChannel');
-    warn "Before status";
+    
+    #warn "Before status";
     if (my $status = $request->{responseStatus}) {
         my @headers;
         my $v = $self->_headerVisitor(sub{push @headers, @_});
@@ -846,6 +893,7 @@ sub response {
             return $self->_extract_response( $js_res );
         } else {
             # make up a response, below
+            #warn "Making up response";
         };
     };
     
@@ -888,7 +936,7 @@ sub status {
     $_[0]->response->code
 };
 
-=head2 C<< $mech->reload BYPASS_CACHE >>
+=head2 C<< $mech->reload( [BYPASS_CACHE] ) >>
 
 Reloads the current page. If C<BYPASS_CACHE>
 is a true value, the browser is not allowed to
@@ -1009,7 +1057,7 @@ JS
     $html->($d);
 };
 
-=head2 C<< $mech->update_html $html >>
+=head2 C<< $mech->update_html( $html ) >>
 
 Writes C<$html> into the current document. This is mostly
 implemented as a convenience method for L<HTML::Display::MozRepl>.
@@ -1025,7 +1073,7 @@ sub update_html {
     });
 };
 
-=head2 C<< $mech->save_content $localname [, $resource_directory] [, %OPTIONS ] >>
+=head2 C<< $mech->save_content( $localname [, $resource_directory] [, %OPTIONS ] ) >>
 
 Saves the given URL to the given filename. The URL will be
 fetched from the cache if possible, avoiding unnecessary network
@@ -1113,7 +1161,7 @@ JS
     );
 }
 
-=head2 C<< $mech->save_url $url, $localname, [%OPTIONS] >>
+=head2 C<< $mech->save_url( $url, $localname, [%OPTIONS] ) >>
 
 Saves the given URL to the given filename. The URL will be
 fetched from the cache if possible, avoiding unnecessary network
@@ -1322,7 +1370,7 @@ sub signal_condition {
     }
 };
 
-=head2 C<< $mech->find_link_dom OPTIONS >>
+=head2 C<< $mech->find_link_dom( OPTIONS ) >>
 
 A method to find links, like L<WWW::Mechanize>'s
 C<< ->find_links >> method.
@@ -1443,7 +1491,7 @@ sub find_link_dom {
     $res[$n]
 }
 
-=head2 C<< $mech->find_link OPTIONS >>
+=head2 C<< $mech->find_link( OPTIONS ) >>
 
 A method quite similar to L<WWW::Mechanize>'s method.
 
@@ -1461,7 +1509,7 @@ sub find_link {
     };
 };
 
-=head2 C<< $mech->find_all_links OPTIONS >>
+=head2 C<< $mech->find_all_links( OPTIONS ) >>
 
 Finds all links in the document.
 
@@ -1923,15 +1971,31 @@ sub selector {
 
 Returns the given tab or the current page rendered as PNG image.
 
+All parameters are optional. 
+ 
+TAB defaults to current TAB.
+
+If the coordinates are given, that rectangle will be cut out.
+The coordinates should be a hash with the four usual entries,
+C<left>,C<top>,C<width>,C<height>.
+
 This is specific to WWW::Mechanize::Firefox.
 
 Currently, the data transfer between Firefox and Perl
 is done Base64-encoded. It would be beneficial to find what's
 necessary to make JSON handle binary data more gracefully.
 
-If the coordinates are given, that rectangle will be cut out.
-The coordinates should be a hash with the four usual entries,
-C<left>,C<top>,C<width>,C<height>.
+=head3 Save the current page as PNG
+
+  my $png = $mech->content_as_png();
+  open my $fh, '>', 'page.png'
+      or die "Couldn't save to 'page.png': $!";
+  binmode $fh;
+  print {$fh} $png;
+  close $fh;
+
+Also see the file C<screenshot.pl> included in the
+distribution.
 
 =head3 Save top left corner of the current page as PNG
 
@@ -2192,7 +2256,10 @@ Make C<< ->selector >> and C<< ->xpath >> work across subframes.
 
 =item *
 
-Implement "reuse tab if exists, otherwise create new"
+Write a unified C<find_element> handler that handles
+the C<single>, C<one> etc. options, instead of (badly)
+reimplementing it in C<xpath>, C<selector>, C<links>
+and C<click>.
 
 =item *
 
@@ -2235,7 +2302,7 @@ for more tab info
 =head1 REPOSITORY
 
 The public repository of this module is 
-L<http://github.com/Corion/www-mechanize-Firefox>.
+L<http://github.com/Corion/www-mechanize-firefox>.
 
 =head1 AUTHOR
 
