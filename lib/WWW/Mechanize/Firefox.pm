@@ -17,7 +17,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.13';
+$VERSION = '0.14';
 
 =head1 NAME
 
@@ -81,6 +81,10 @@ the first try.
 =item * 
 
 C<log> - array reference to log levels, passed through to L<MozRepl::RemoteObject>
+
+=item *
+
+C<bufsize> - L<Net::Telnet> buffer size, if the default of 1MB is not enough
 
 =item * 
 
@@ -1084,7 +1088,7 @@ All CSS, subframes and images
 will be saved into that directory, while the page HTML itself will
 still be saved in the file pointed to by C<$localname>.
 
-Returns a C<<nsIWebBrowserPersist>> object through which you can cancel the
+Returns a C<nsIWebBrowserPersist> object through which you can cancel the
 download by calling its C<< ->cancelSave >> method. Also, you can poll
 the download status through the C<< ->{currentState} >> property.
 
@@ -1167,7 +1171,7 @@ Saves the given URL to the given filename. The URL will be
 fetched from the cache if possible, avoiding unnecessary network
 traffic.
 
-Returns a C<<nsIWebBrowserPersist>> object through which you can cancel the
+Returns a C<nsIWebBrowserPersist> object through which you can cancel the
 download by calling its C<< ->cancelSave >> method. Also, you can poll
 the download status through the C<< ->{currentState} >> property.
 
@@ -1795,7 +1799,7 @@ not the C<id> attribute.
 
 By passing the array reference C<PRE EVENTS>, you can indicate which
 Javascript events you want to be triggered before setting the value.
-C<POST EVENTS> contains the evens you want to be triggered
+C<POST EVENTS> contains the events you want to be triggered
 after setting the value.
 
 By default, the events set in the
@@ -1897,12 +1901,17 @@ The options allow the following keys:
 
 =item *
 
-C<< document >> - document in which the code is to be executed. Use this to
-search a node within a subframe of C<< $mech->document >>.
+C<< document >> - document in which the query is to be executed. Use this to
+search a node within a specific subframe of C<< $mech->document >>.
 
 =item *
 
-C<< node >> - node relative to which the code is to be executed
+C<< frames >> - if true, search all documents in all frames and iframes.
+This may or may not conflict with C<node>.
+
+=item *
+
+C<< node >> - node relative to which the query is to be executed
 
 =item *
 
@@ -1933,6 +1942,17 @@ sub xpath {
     my $single = delete $options{ single };
     my $one = delete $options{ one } || $single;
     my @res = $options{ document }->__xpath($query, $options{ node });
+    
+    # recursively join the results of sub(i)frames if wanted
+    if ($options{frames}) {
+        my @frames = $options{ document }->__xpath('//frame | //iframe');
+        for my $frame (@frames) {
+            $options{ document } = $frame->{contentDocument};
+            $options{ node } = $options{ document };
+            push @res, $self->xpath($query, %options);
+        };
+    };
+    
     if ($one) {
         if (@res == 0) {
             $self->signal_condition( "No elements found for $options{ user_info }" );
