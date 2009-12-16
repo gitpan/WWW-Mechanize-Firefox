@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               WWW-Mechanize-Firefox
-version:            0.14
+version:            0.15
 abstract:           use Firefox as if it were WWW::Mechanize
 author:
     - Max Maischein <corion@cpan.org>
@@ -16,10 +16,15 @@ requires:
     MIME::Base64:         0
     MozRepl::RemoteObject:  0.11
     parent:               0
+    perl:                 5.006
+    Scalar::Util:         1.14
     Shell::Command:       0
+    Task::Weaken:         0
     URI:                  0
     WWW::Mechanize:       0
     WWW::Mechanize::Link:  0
+resources:
+    repository:  http://github.com/Corion/www-mechanize-firefox
 no_index:
     directory:
         - t

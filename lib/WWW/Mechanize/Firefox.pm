@@ -1,4 +1,5 @@
 package WWW::Mechanize::Firefox;
+use 5.006; #weaken
 use strict;
 use Time::HiRes;
 
@@ -17,7 +18,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.14';
+$VERSION = '0.15';
 
 =head1 NAME
 
@@ -37,17 +38,6 @@ Mozrepl plugin, which you need to have installed
 in your Firefox.
 
 =head1 METHODS
-
-=cut
-
-sub execute {
-    my ($package,$repl,$js) = @_;
-    if (2 == @_) {
-        $js = $repl;
-        $repl = $package->repl;
-    };
-    $repl->execute($js)
-}
 
 =head2 C<< $mech->new( ARGS ) >>
 
@@ -277,7 +267,7 @@ sub js_console {
     my $getConsoleService = $self->repl->declare(<<'JS');
     function() {
         return  Components.classes["@mozilla.org/consoleservice;1"]
-                .getService(Ci.nsIConsoleService);
+                .getService(Components.interfaces.nsIConsoleService);
     }
 JS
     $getConsoleService->()
@@ -2043,8 +2033,8 @@ sub content_as_png {
     # http://wiki.github.com/bard/mozrepl/interactor-screenshot-server
     my $screenshot = $self->repl->declare(<<'JS');
     function (tab,rect) {
-        var browserWindow = Cc['@mozilla.org/appshell/window-mediator;1']
-            .getService(Ci.nsIWindowMediator)
+        var browserWindow = Components.classes['@mozilla.org/appshell/window-mediator;1']
+            .getService(Components.interfaces.nsIWindowMediator)
             .getMostRecentWindow('navigator:browser');
         var canvas = browserWindow
                .document
@@ -2269,10 +2259,6 @@ and our own C<nsIWebProgressListener>.
 =item *
 
 Make C<< ->click >> use C<< ->click_with_options >>
-
-=item *
-
-Make C<< ->selector >> and C<< ->xpath >> work across subframes.
 
 =item *
 
