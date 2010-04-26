@@ -18,7 +18,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.16';
+$VERSION = '0.17';
 
 =head1 NAME
 
@@ -299,7 +299,9 @@ sub clear_js_errors {
 
 };
 
-=head2 C<< $mech->eval_in_page STR [, ENV] [, DOCUMENT] >>
+=head2 C<< $mech->eval_in_page( $STR [, $ENV] [, $DOCUMENT] ) >>
+
+=head2 C<< $mech->eval( $STR [, $ENV] [, $DOCUMENT] ) >>
 
 Evaluates the given Javascript fragment in the
 context of the web page.
@@ -377,6 +379,7 @@ JS
     #my $window = $doc->{window}; # $self->tab->{linkedBrowser}->{contentWindow};
     return @{ $eval_in_sandbox->($window,$doc,$str,$js_env) };
 };
+*eval = \&eval_in_page;
 
 =head2 C<< $mech->unsafe_page_property_access( ELEMENT ) >>
 
@@ -774,7 +777,6 @@ sub _install_response_header_listener {
     my $STATE_STOP = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_STOP');
     my $STATE_IS_DOCUMENT = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT');
     my $STATE_IS_WINDOW = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW');
-    #my $nsIHttpChannel = $self->repl->expr('Components.interfaces.nsIHttpChannel');
 
     my $state_change = sub {
         my ($progress,$request,$flags,$status) = @_;
@@ -860,15 +862,14 @@ sub _extract_response {
     #warn $request->{name};
     my $nsIHttpChannel = $self->repl->expr('Components.interfaces.nsIHttpChannel');
     my $httpChannel = $request->QueryInterface($nsIHttpChannel);
-
     
-    if (my $status = $request->{requestSucceeded}) {
+    if (my $status = $httpChannel->{requestSucceeded}) {
         my @headers;
         my $v = $self->_headerVisitor(sub{push @headers, @_});
-        $request->visitResponseHeaders($v);
+        $httpChannel->visitResponseHeaders($v);
         my $res = HTTP::Response->new(
-            $request->{responseStatus},
-            $request->{responseStatusText},
+            $httpChannel->{responseStatus},
+            $httpChannel->{responseStatusText},
             \@headers,
             undef, # no body so far
         );
@@ -2440,6 +2441,10 @@ The MozRepl Firefox plugin at L<http://wiki.github.com/bard/mozrepl>
 =item *
 
 L<WWW::Mechanize> - the module whose API grandfathered this module
+
+=item *
+
+L<WWW::Scripter> - another WWW::Mechanize-workalike with Javascript support
 
 =item *
 
