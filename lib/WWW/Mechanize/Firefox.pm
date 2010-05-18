@@ -18,7 +18,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.17';
+$VERSION = '0.18';
 
 =head1 NAME
 
@@ -1704,7 +1704,8 @@ Selects the current form by its name.
 
 sub form_name {
     my ($self,$name,%options) = @_;
-    $self->{current_form} = $self->selector("form:$name",
+    $name = quote_xpath $name;
+    $self->{current_form} = $self->selector("form[name='$name']",
         user_info => "form id '$name'",
         single => 1,
         %options
@@ -1760,8 +1761,8 @@ sub form_with_fields {
     if (ref $fields[0] eq 'HASH') {
         $options = shift @fields;
     };
-    my @clauses = map { sprintf 'input[@name="%s"]', quote_xpath($_) } @fields;
-    my $q = "//form[" . join( "", @clauses)."]";
+    my @clauses = map { sprintf './/input[@name="%s"]', quote_xpath($_) } @fields;
+    my $q = "//form[" . join( " and ", @clauses)."]";
     #warn $q;
     $self->{current_form} = $self->xpath($q,
         single => 1,
@@ -1893,6 +1894,7 @@ sub submit {
     $dom_form ||= $self->current_form;
     if ($dom_form) {
         $dom_form->submit();
+        1;
     } else {
         croak "I don't know which form to submit, sorry.";
     }
