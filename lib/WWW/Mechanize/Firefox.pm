@@ -18,7 +18,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.19';
+$VERSION = '0.20';
 
 =head1 NAME
 
@@ -1404,9 +1404,21 @@ it also C<croak>s when more than one link is found.
 
 =cut
 
+use vars '%xpath_quote';
+%xpath_quote = (
+    '"' => '\"',
+    #"'" => "\\'",
+    #'[' => '&#91;',
+    #']' => '&#93;',
+    #'[' => '[\[]',
+    #'[' => '\[',
+    #']' => '[\]]',
+);
+
 sub quote_xpath($) {
     local $_ = $_[0];
-    s/(['"\[])/\\$1/g;
+    #s/(['"\[\]])/\\$1/g;
+    s/(['"\[\]])/$xpath_quote{$1} || $1/ge;
     $_
 };
 
@@ -1762,6 +1774,7 @@ sub form_with_fields {
         $options = shift @fields;
     };
     my @clauses = map { sprintf './/input[@name="%s"]', quote_xpath($_) } @fields;
+    #my @clauses = map { sprintf './/input[@name="%s"]', $_ } @fields;
     my $q = "//form[" . join( " and ", @clauses)."]";
     #warn $q;
     $self->{current_form} = $self->xpath($q,
@@ -2429,6 +2442,22 @@ Preferrably, there should be a common API between the two.
 
 Spin off XPath queries (C<< ->xpath >>) and CSS selectors (C<< ->selector >>)
 into their own Mechanize plugin(s).
+
+=back
+
+=head1 INSTALLING
+
+=over 4
+
+=item *
+
+Install the C<mozrepl> add-on into Firefox
+
+=item *
+
+Start the C<mozrepl> add-on or you will see test failures/skips
+in the module when calling C<< ->new >>. You may want to set
+C<mozrepl> to start when the browser starts.
 
 =back
 
