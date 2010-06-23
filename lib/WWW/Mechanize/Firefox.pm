@@ -18,7 +18,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.21';
+$VERSION = '0.22';
 
 =head1 NAME
 
@@ -33,9 +33,11 @@ WWW::Mechanize::Firefox - use Firefox as if it were WWW::Mechanize
   $mech->eval_in_page('alert("Hello Firefox")');
   my $png = $mech->content_as_png();
 
-This will let you automate Firefox through the
-Mozrepl plugin, which you need to have installed
-in your Firefox.
+This module will let you automate Firefox through the
+Mozrepl plugin. You you need to have installed
+that plugin in your Firefox.
+
+For more examples see L<WWW::Mechanize::Firefox::Examples>.
 
 =head1 METHODS
 
@@ -528,6 +530,14 @@ This method is special to WWW::Mechanize::Firefox.
 
 sub tab { $_[0]->{tab} };
 
+=head2 C<< $mech->autodie >>
+
+Accessor to get/set whether warnings become fatal.
+
+=cut
+
+sub autodie { $_[0]->{autodie} = $_[1] if @_ == 2; $_[0]->{autodie} }
+
 =head2 C<< $mech->progress_listener( SOURCE, CALLBACKS ) >>
 
 Sets up the callbacks for the C<< nsIWebProgressListener >> interface
@@ -913,7 +923,7 @@ sub response {
             return $self->_extract_response( $js_res );
         } else {
             # make up a response, below
-            warn "Making up response";
+            warn "Making up response for unknown scheme '$scheme'";
         };
     };
     
@@ -1593,11 +1603,17 @@ the following keys are recognized:
 
 =over 4
 
-=item * C<selector> - Find the element to click by the CSS selector
+=item *
 
-=item * C<xpath> - Find the element to click by the XPath query
+C<selector> - Find the element to click by the CSS selector
 
-=item * C<synchronize> - Synchronize the click (default is 1)
+=item *
+
+C<xpath> - Find the element to click by the XPath query
+
+=item *
+
+C<synchronize> - Synchronize the click (default is 1)
 
 =back
 
@@ -1612,73 +1628,53 @@ the parameters to search much like for the C<find_link> calls.
 sub click {
     my ($self,$name,$x,$y) = @_;
     my %options;
-    my $q;
     my @buttons;
+    
     if (ref $name and blessed($name) and $name->can('__click')) {
         $options{ dom } = $name;
-        $options{ synchronize } = 1;
     } elsif (ref $name eq 'HASH') { # options
-        if (exists $name->{ dom }) {
-            @buttons = delete $name->{dom};
-        } else {
-            my ($method,$q);
-            for my $meth (qw(selector xpath)) {
-                if (exists $name->{ $meth }) {
-                    $q = delete $name->{ $meth };
-                    $method = $meth;
-                }
-            };
-            croak "Need either a selector or an xpath key!"
-                if not $method;
-            @buttons = $self->$method( $q => %$name );
-        };
-        %options = (%options, %$name);
+        %options = %$name;
     } else {
         $options{ name } = $name;
-        $options{ synchronize } = 1;
     };
+    
+    if (exists $options{ name }) {
+        $name = quotemeta($options{ name }|| '');
+        $options{ xpath } = [
+                       sprintf( q{//button[@name="%s"]}, $name),
+                       sprintf( q{//input[(@type="button" or @type="submit") and @name="%s"]}, $name), 
+                       q{//button},
+                       q{//input[(@type="button" or @type="submit")]},
+        ];
+        $options{ user_info } = "Button with name '$name'";
+    };
+    
     if (! exists $options{ synchronize }) {
         $options{ synchronize } = 1;
     };
     
     if ($options{ dom }) {
         @buttons = $options{ dom };
-        $q = "DOM element";
-    } elsif (exists $options{ selector }) {
-        @buttons = $self->selector( $options{ selector } );
-        $q = "selector = '$options{ selector }'";
-    } elsif (exists $options{ xpath }) {
-        @buttons = $self->xpath( $options{ xpath } );
-        $q = "xpath = '$options{ xpath }'";
-    } elsif (exists $options{ name }) {
-        my $name = delete $options{ $name };
-        $q = "name = '$name'";
-        $name = quotemeta($name || '');
-        @buttons = (
-                       $self->xpath(sprintf q{//button[@name="%s"]}, $name),
-                       $self->xpath(sprintf q{//input[(@type="button" or @type="submit") and @name="%s"]}, $name), 
-                       $self->xpath(q{//button}),
-                       $self->xpath(q{//input[(@type="button" or @type="submit")]}), 
-                      );
-    };
-    if ($options{ one }) {
-        if (0 == @buttons) {
-            $self->signal_condition(
-                "No button matching '$name' found"
-            );
+    } else {
+        my ($method,$q);
+        for my $meth (qw(selector xpath)) {
+            if (exists $options{ $meth }) {
+                $q = delete $options{ $meth };
+                $method = $meth;
+            }
         };
-        if ($options{ single }) {
-            if (1 <  @buttons) {
-                $self->highlight_node(@buttons);
-                $self->signal_condition(
-                    sprintf "%d buttons found found matching '%s'", scalar @buttons, $q
-                );
-            };
+        if (! exists $options{ one }) {
+            $options{ one } = 1;
         };
+        croak "Need either a name, a selector or an xpath key!"
+            if not $method;
+        @buttons = $self->$method( $q, %options );
     };
     
+    #warn "Clicking id $buttons[0]->{id}";
+    
     if ($options{ synchronize }) {
-        my $event = $self->synchronize($self->events, sub { # ,'abort'
+        $self->synchronize($self->events, sub { # ,'abort'
             $buttons[0]->__click();
         });
     } else {
@@ -2138,6 +2134,8 @@ or carp, depending on the C<autodie> parameter.
 
 Returns the matched nodes.
 
+You can pass in a list of queries as an array reference for the first parameter.
+
 This is a method that is not implemented in WWW::Mechanize.
 
 In the long run, this should go into a general plugin for
@@ -2147,13 +2145,15 @@ L<WWW::Mechanize>.
 
 sub xpath {
     my ($self,$query,%options) = @_;
+    if ('ARRAY' ne (ref $query||'')) {
+        $query = [$query];
+    };
     $options{ document } ||= $self->document;
     $options{ node } ||= $options{ document };
-    $options{ user_info } ||= "'$query'";
+    $options{ user_info } ||= join " or ", map {qq{'$_'}} @$query;
     my $single = delete $options{ single };
     my $one = delete $options{ one } || $single;
-    #warn $query;
-    my @res = $options{ document }->__xpath($query, $options{ node });
+    my @res = map { $options{ document }->__xpath($_, $options{ node }) } @$query;
     
     if (not exists $options{ frames }) {
         $options{frames} = $self->{frames};
@@ -2189,6 +2189,8 @@ sub xpath {
 
 Returns all nodes matching the given CSS selector.
 
+This takes the same options that C<< ->xpath >> does.
+
 In the long run, this should go into a general plugin for
 L<WWW::Mechanize>.
 
@@ -2197,8 +2199,11 @@ L<WWW::Mechanize>.
 sub selector {
     my ($self,$query,%options) = @_;
     $options{ user_info } ||= "CSS selector '$query'";
-    my $q = selector_to_xpath($query);    
-    $self->xpath($q, %options);
+    if ('ARRAY' ne (ref $query || '')) {
+        $query = [$query];
+    };
+    my @q = map { selector_to_xpath($_); } @$query;
+    $self->xpath(\@q, %options);
 };
 
 =head2 C<< $mech->expand_frames SPEC >>
@@ -2581,7 +2586,7 @@ Max Maischein C<corion@cpan.org>
 
 =head1 COPYRIGHT (c)
 
-Copyright 2009 by Max Maischein C<corion@cpan.org>.
+Copyright 2009-2010 by Max Maischein C<corion@cpan.org>.
 
 =head1 LICENSE
 
