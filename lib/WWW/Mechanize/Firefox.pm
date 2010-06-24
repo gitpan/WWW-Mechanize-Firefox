@@ -18,7 +18,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.22';
+$VERSION = '0.23';
 
 =head1 NAME
 
@@ -396,7 +396,6 @@ JS
     };
 JS
     $window ||= $self->tab->{linkedBrowser}->{contentWindow};
-    #my $window = $doc->{window}; # $self->tab->{linkedBrowser}->{contentWindow};
     return @{ $eval_in_sandbox->($window,$doc,$str,$js_env) };
 };
 *eval = \&eval_in_page;
@@ -2101,6 +2100,12 @@ sub clickables {
 
 Runs an XPath query in Firefox against the current document.
 
+    my $link = $mech->xpath('//a[id="clickme"]', one => 1);
+    # croaks if there is no link or more than one link found
+
+    my @para = $mech->xpath('//p');
+    # Collects all paragraphs
+
 The options allow the following keys:
 
 =over 4
@@ -2130,6 +2135,18 @@ or carp, depending on the C<autodie> parameter.
 C<< one >> - If true, ensure that at least one element is found. Otherwise croak
 or carp, depending on the C<autodie> parameter.
 
+=item *
+
+C<< maybe >> - If true, ensure that at most one element is found. Otherwise
+croak or carp, depending on the C<autodie> parameter.
+
+=item *
+
+C<< all >> - If true, return all elements found. This is the default.
+You can use this option if you want to use C<< ->xpath >> in scalar context
+to count the number of matched elements, as it will otherwise emit a warning
+for each usage in scalar context without any of the above restricting options.
+
 =back
 
 Returns the matched nodes.
@@ -2148,41 +2165,75 @@ sub xpath {
     if ('ARRAY' ne (ref $query||'')) {
         $query = [$query];
     };
-    $options{ document } ||= $self->document;
-    $options{ node } ||= $options{ document };
+    
+    if ($options{ node }) {
+        $options{ document } ||= $options{ node }->{ownerDocument};
+        warn "Have node, searching below node";
+    } else {
+        $options{ document } ||= $self->document;
+        #$options{ node } = $options{ document };
+    };
+    
     $options{ user_info } ||= join " or ", map {qq{'$_'}} @$query;
     my $single = delete $options{ single };
-    my $one = delete $options{ one } || $single;
-    my @res = map { $options{ document }->__xpath($_, $options{ node }) } @$query;
+    my $one    = delete $options{ one };
+    my $maybe  = delete $options{ maybe };
+    
+    # Construct some helper variables
+    my $zero_allowed = not $single;
+    my $two_allowed = not( $single or $maybe );
+    my $return_first = ($single or $one or $maybe);
+    
+    # Sanity check for the common error of
+    # my $item = $mech->xpath("//foo");
+    if (! exists $options{ all } and not ($return_first)) {
+        $self->signal_condition(join "\n",
+            "You asked for many elements but seem to only want a single item.",
+            "Did you forget to pass the 'single' option with a true value?",
+            "Pass 'all => 1' to suppress this message and receive the count of items.",
+        ) if defined wantarray and !wantarray;
+    };
     
     if (not exists $options{ frames }) {
         $options{frames} = $self->{frames};
     };
     
-    # recursively join the results of sub(i)frames if wanted
-    if ($options{frames}) {
-        my @frames = $self->expand_frames( $options{ frames }, $options{ document } );
-        for my $frame (@frames) {
-            $options{ document } = $frame->{contentDocument};
-            $options{ node } = $options{ document };
-            push @res, $self->xpath($query, %options);
+    my @res;
+    
+    DOCUMENTS: {            
+        my @documents = $options{ document };
+        #warn "Invalid root document" unless $options{ document };
+        
+        # recursively join the results of sub(i)frames if wanted
+        # This should maybe go into the loop to expand every frame as we descend
+        # into the available subframes
+        if ($options{ frames } and not $options{ node }) {
+            push @documents, $self->expand_frames( $options{ frames }, $options{ document } );
+        };
+
+        while (@documents) {
+            my $doc = shift @documents;
+            #warn "Invalid document" unless $doc;
+
+            my $n = $options{ node } || $doc;
+            push @res, map { $doc->__xpath($_, $n) } @$query;
+            
+            # A small optimization to return if we already have enough elements
+            # We can't do this on $return_first as there might be more elements
+            last DOCUMENTS if @res and $one;        
         };
     };
     
-    if ($one) {
-        if (@res == 0) {
-            $self->signal_condition( "No elements found for $options{ user_info }" );
-        };
-        if ($single) {
-            if (@res > 1) {
-                $self->highlight_node(@res);
-                $self->signal_condition( (scalar @res) . " elements found for $options{ user_info }" );
-            }
-        };
-        return @res ? $res[0] : ();
-    } else {
-        return @res
+    if (! $zero_allowed and @res == 0) {
+        $self->signal_condition( "No elements found for $options{ user_info }" );
     };
+    
+    if (! $two_allowed and @res > 1) {
+        $self->highlight_node(@res);
+        $self->signal_condition( (scalar @res) . " elements found for $options{ user_info }" );
+    };
+    
+    return $return_first ? $res[0] : @res;
 };
 
 =head2 C<< $mech->selector css_selector, %options >>
@@ -2209,8 +2260,11 @@ sub selector {
 =head2 C<< $mech->expand_frames SPEC >>
 
 Expands the frame selectors (or C<1> to match all frames)
-into their respective DOM nodes according to the current
+into their respective DOM document nodes according to the current
 document.
+
+This method currently does not properly recurse downwards and will
+only expand one level of frames.
 
 This is mostly an internal method.
 
@@ -2230,10 +2284,12 @@ sub expand_frames {
     map { #warn "Expanding $_";
             ref $_
           ? $_
-          : $self->selector( $_,
-                           document => $document,
-                           frames => 0, # otherwise we'll recurse :)
-          )
+          : map { $_->{contentDocument} }
+            $self->selector(
+                $_,
+                document => $document,
+                frames => 0, # otherwise we'll recurse :)
+            )
     } @spec;
 };
 
