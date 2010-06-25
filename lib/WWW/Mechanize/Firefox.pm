@@ -18,7 +18,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.23';
+$VERSION = '0.24';
 
 =head1 NAME
 
@@ -1408,26 +1408,46 @@ Returns the DOM object as L<MozRepl::RemoteObject>::Instance.
 
 The supported options are:
 
+=over 4
+
+=item *
+
 C<< text >> - the text of the link
+
+=item *
 
 C<< id >> - the C<id> attribute of the link
 
+=item *
+
 C<< name >> - the C<name> attribute of the link
+
+=item *
 
 C<< url >> - the URL attribute of the link (C<href>, C<src> or C<content>).
 
+=item *
+
 C<< class >> - the C<class> attribute of the link
+
+=item *
 
 C<< n >> - the (1-based) index. Defaults to returning the first link.
 
+=item *
+
 C<< single >> - If true, ensure that only one element is found. Otherwise croak
 or carp, depending on the C<autodie> parameter.
+
+=item *
 
 C<< one >> - If true, ensure that at least one element is found. Otherwise croak
 or carp, depending on the C<autodie> parameter.
 
 The method C<croak>s if no link is found. If the C<single> option is true,
 it also C<croak>s when more than one link is found.
+
+=back
 
 =cut
 
@@ -1452,8 +1472,13 @@ sub quote_xpath($) {
 sub find_link_dom {
     my ($self,%opts) = @_;
     my %xpath_options;
-    my $document = delete $opts{ document } || $self->document;
-    my $node = delete $opts{ node } || $document;
+    
+    for (qw(node document)) {
+        if ($opts{ $_ }) {
+            $xpath_options{ $_ } = delete $opts{ $_ };
+        };
+    };
+    
     my $single = delete $opts{ single };
     my $one = delete $opts{ one } || $single;
     if ($single and exists $opts{ n }) {
@@ -1501,7 +1526,7 @@ sub find_link_dom {
             }  (@tags);
     #warn $q;
     
-    my @res = $document->__xpath($q, $node);
+    my @res = $self->xpath($q, %xpath_options );
     
     if (keys %opts) {
         # post-filter the remaining links through WWW::Mechanize
@@ -1538,12 +1563,14 @@ A method quite similar to L<WWW::Mechanize>'s method.
 
 Returns a L<WWW::Mechanize::Link> object.
 
+This defaults to not look through child frames.
+
 =cut
 
 sub find_link {
     my ($self,%opts) = @_;
     my $base = $self->base;
-    if (my $link = $self->find_link_dom(%opts)) {
+    if (my $link = $self->find_link_dom(frames => 0, %opts)) {
         return $self->make_link($link, $base)
     } else {
         return
@@ -1557,15 +1584,17 @@ Finds all links in the document.
 Returns them as list or an array reference, depending
 on context.
 
+This defaults to not look through child frames.
+
 =cut
 
 sub find_all_links {
-    my ($self,%opts) = @_;
+    my ($self, %opts) = @_;
     $opts{ n } = 'all';
     my $base = $self->base;
     my @matches = map {
         $self->make_link($_, $base);
-    } $self->find_all_links_dom( %opts );
+    } $self->find_all_links_dom( frames => 0, %opts );
     return @matches if wantarray;
     return \@matches;
 };
@@ -1577,12 +1606,14 @@ Finds all matching linky DOM nodes in the document.
 Returns them as list or an array reference, depending
 on context.
 
+This defaults to not look through child frames.
+
 =cut
 
 sub find_all_links_dom {
     my ($self,%opts) = @_;
     $opts{ n } = 'all';
-    my @matches = $self->find_link_dom( %opts );
+    my @matches = $self->find_link_dom( frames => 0, %opts );
     return @matches if wantarray;
     return \@matches;
 };
@@ -1613,6 +1644,11 @@ C<xpath> - Find the element to click by the XPath query
 =item *
 
 C<synchronize> - Synchronize the click (default is 1)
+
+Synchronizing means that WWW::Mechanize::Firefox will wait until
+one of the events listed in C<events> is fired. You want to switch
+it off when there will be no HTTP response or DOM event fired, for
+example for clicks that only modify the DOM.
 
 =back
 
@@ -1776,7 +1812,9 @@ sub form_number {
 Find the form which has the listed fields.
 
 If the first argument is a hash reference, it's taken
-as options to C<< ->xpath >>
+as options to C<< ->xpath >>.
+
+See also C<< $mech->submit_form >>.
 
 =cut
 
@@ -1978,10 +2016,19 @@ and data setting in one operation. It selects the first form that contains
 all fields mentioned in \%fields. This is nice because you don't need to
 know the name or number of the form to do this.
 
-(calls C<<form_with_fields()>> and C<<set_fields()>>).
+(calls C<< form_with_fields() >> and C<< set_fields() >>).
 
 If you choose this, the form_number, form_name, form_id and fields options
 will be ignored.
+
+Example:
+
+  $mech->get('http://google.com/');
+  $mech->submit_form(
+      with_fields => {
+          q => 'WWW::Mechanize::Firefox examples',
+      },
+  );
 
 =back
 
@@ -1994,7 +2041,7 @@ sub submit_form {
     my $fields;
     if (! $form) {
         if ($fields = delete $options{ with_fields }) {
-            my @names = map { $_ & 1 ? () : $fields->[$_] } 0..$#$fields;
+            my @names = keys %$fields;
             $form = $self->form_with_fields( \%options, @names );
             if (! $form) {
                 $self->signal_condition("Couldn't find a matching form for @names.");
@@ -2026,12 +2073,12 @@ has the field value and its number as the 2 elements.
 =cut
 
 sub set_fields {
-    my ($self, @fields) = @_;
+    my ($self, %fields) = @_;
     my $f = $self->current_form;
     if (! $f) {
         croak "Can't set fields: No current form set.";
     };
-    $self->do_set_fields($self, form => $f, fields => \@fields);
+    $self->do_set_fields($self, form => $f, fields => \%fields);
 };
 
 sub do_set_fields {
@@ -2039,7 +2086,7 @@ sub do_set_fields {
     my $form = delete $options{ form };
     my $fields = delete $options{ fields };
     
-    while (my($n,$v) = splice @$fields, 0,2) {
+    while (my($n,$v) = each %$fields) {
         if (ref $v) {
             ($v,my $num) = @$v;
             warn "Index larger than 1 not supported"
@@ -2168,7 +2215,7 @@ sub xpath {
     
     if ($options{ node }) {
         $options{ document } ||= $options{ node }->{ownerDocument};
-        warn "Have node, searching below node";
+        #warn "Have node, searching below node";
     } else {
         $options{ document } ||= $self->document;
         #$options{ node } = $options{ document };
