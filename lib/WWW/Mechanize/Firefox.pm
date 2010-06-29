@@ -18,7 +18,7 @@ use Carp qw(carp croak);
 use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.24';
+$VERSION = '0.25';
 
 =head1 NAME
 
@@ -102,7 +102,8 @@ waiting for a reply
 
 =item * 
 
-C<repl> - a premade L<MozRepl::RemoteObject> instance
+C<repl> - a premade L<MozRepl::RemoteObject> instance or a connection string
+suitable for initializing one.
 
 =item * 
 
@@ -131,9 +132,10 @@ in a Firefox process if it is not already running.
 sub new {
     my ($class, %args) = @_;
     my $loglevel = delete $args{ log } || [qw[ error ]];
-    if (! $args{ repl }) {
+    if (! ref $args{ repl }) {
         my $ff = delete $args{ launch };
         $args{ repl } = MozRepl::RemoteObject->install_bridge(
+            repl   => $args{ repl } || undef,
             launch => $ff,
             log => $loglevel,
         );
@@ -443,7 +445,10 @@ sub addTab {
           // No browser windows are open, so open a new one.
           win = window.open('about:blank');
         };
-        return win.getBrowser().addTab()
+        var b = win.getBrowser();
+        var t = b.addTab();
+        t.parentTabBox = b;
+        return t
     }
 JS
     if (not exists $options{ autoclose } or $options{ autoclose }) {
@@ -455,15 +460,11 @@ JS
 
 sub autoclose_tab {
     my ($self,$tab) = @_;
-    #warn "Installing autoclose";
     my $release = join "",
-    q{var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]},
-    q{                   .getService(Components.interfaces.nsIWindowMediator);},
-    q{var win = wm.getMostRecentWindow('navigator:browser');},
-    q{if (!win){win = window};},
-    q{win.getBrowser().removeTab(self)},
+        q{var b=self.parentTabBox;},
+        q{self.parentTabBox=undefined;},
+        q{if(b){b.removeTab(self)};},
     ;
-    #warn $release;
     $tab->__release_action($release);
 };
 
@@ -684,6 +685,10 @@ It returns a faked L<HTTP::Response> object for interface compatibility
 with L<WWW::Mechanize>. It does not yet support the additional parameters
 that L<WWW::Mechanize> supports for saving a file etc.
 
+Example:
+
+  $mech->get('http://google.com');
+
 =cut
 
 sub get {
@@ -698,10 +703,15 @@ sub get {
 =head2 C<< $mech->get_local( $filename ) >>
 
 Shorthand method to construct the appropriate
-C<< file:// >> URI and load it into Firefox.
+C<< file:// >> URI and load it into Firefox. Relative
+paths will be interpreted as relative to C<$0>.
 
 This method is special to WWW::Mechanize::Firefox but could
 also exist in WWW::Mechanize through a plugin.
+
+Example:
+
+  $mech->get_local('test.html');
 
 =cut
 
@@ -792,6 +802,7 @@ event instead.
 
 If you leave out C<$event>, the value of C<< ->events() >> will
 be used instead.
+
 
 =cut
 
@@ -1100,6 +1111,7 @@ sub update_html {
     $self->synchronize($self->events, sub {
         $self->tab->{linkedBrowser}->loadURI($url);
     });
+    return
 };
 
 =head2 C<< $mech->save_content( $localname [, $resource_directory] [, %OPTIONS ] ) >>
@@ -1124,6 +1136,11 @@ and pass it in the C<progress> option.
 The download will
 continue in the background. It will not show up in the
 Download Manager.
+
+Example:
+
+  $mech->get('http://google.com');
+  $mech->save_content('google search page','google search page files');
 
 =cut
 
@@ -1210,15 +1227,15 @@ Download Manager.
 
 =head3 Upload a file to an C<ftp> server
 
+B< Not implemented > - this requires instantiating and passing
+a C< nsIURI > object instead of a C< nsILocalFile >.
+
 You can use C<< ->save_url >> to I<transfer> files. C<$localname>
 can be a local filename, a C<file://> URL or any other URL that allows
 uploads, like C<ftp://>.
 
   $mech->save_url('file://path/to/my/file.txt'
       => 'ftp://myserver.example/my/file.txt');
-
-B< Not implemented > - this requires instantiating and passing
-a C< nsIURI > object instead of a C< nsILocalFile >.
 
 =cut
 
@@ -1328,7 +1345,8 @@ sub title {
 
 Returns all links in the document.
 
-Currently accepts no parameters.
+Currently accepts no parameters. See C<< ->xpath >>
+or C<< ->selector >> when you want more control.
 
 =cut
 
@@ -1560,6 +1578,7 @@ sub find_link_dom {
 =head2 C<< $mech->find_link( OPTIONS ) >>
 
 A method quite similar to L<WWW::Mechanize>'s method.
+The options are documented in C<< ->find_link_dom >>.
 
 Returns a L<WWW::Mechanize::Link> object.
 
@@ -1580,6 +1599,7 @@ sub find_link {
 =head2 C<< $mech->find_all_links( OPTIONS ) >>
 
 Finds all links in the document.
+The options are documented in C<< ->find_link_dom >>.
 
 Returns them as list or an array reference, depending
 on context.
@@ -1602,6 +1622,7 @@ sub find_all_links {
 =head2 C<< $mech->find_all_links_dom OPTIONS >>
 
 Finds all matching linky DOM nodes in the document.
+The options are documented in C<< ->find_link_dom >>.
 
 Returns them as list or an array reference, depending
 on context.
@@ -1618,6 +1639,28 @@ sub find_all_links_dom {
     return \@matches;
 };
 
+
+=head2 C<< $mech->follow_link LINK >>
+
+=head2 C<< $mech->follow_link OPTIONS >>
+
+Follows the given link. Takes the same parameters that C<find_link_dom>
+uses.
+
+=cut
+
+sub follow_link {
+    my ($self,$link,%opts);
+    if (@_ == 2) { # assume only a link parameter
+        ($self,$link) = @_
+    } else {
+        ($self,%opts) = @_;
+        $link = $self->find_link_dom(one => 1, %opts);
+    }
+    $self->synchronize( sub {
+        $link->__click();
+    });
+}
 
 =head2 C<< $mech->click NAME [,X,Y] >>
 
@@ -1719,26 +1762,6 @@ sub click {
     if (defined wantarray) {
         return $self->response
     };
-}
-
-=head2 C<< $mech->follow_link >>
-
-Follows the given link. Takes the same parameters that C<find_link>
-uses.
-
-=cut
-
-sub follow_link {
-    my ($self,$link,%opts);
-    if (@_ == 2) { # assume only a link parameter
-        ($self,$link) = @_
-    } else {
-        ($self,%opts) = @_;
-        $link = $self->find_link_dom(one => 1, %opts);
-    }
-    $self->synchronize( sub {
-        $link->__click();
-    });
 }
 
 =head1 FORM METHODS
@@ -2003,6 +2026,12 @@ a list of key/value pairs, all of which are optional.
 
 =item *
 
+C<< form => $mech->current_form() >>
+
+Specifies the form to be filled and submitted. Defaults to the current form.
+
+=item *
+
 C<< fields => \%fields >>
 
 Specifies the fields to be filled in the current form
@@ -2047,10 +2076,9 @@ sub submit_form {
                 $self->signal_condition("Couldn't find a matching form for @names.");
                 return
             };
-        } elsif ($fields = delete $options{ fields }) {
-            $form = $self->current_form;
         } else {
-            croak "No form given to submit.";
+            $fields = delete $options{ fields } || {};
+            $form = $self->current_form;
         };
     };
     

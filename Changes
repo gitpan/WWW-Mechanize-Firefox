@@ -1,5 +1,16 @@
 To be released
 
+0.25 to be released
+    . ->submit_form now can submit the current form without any fields
+      specified. This was a fatal error before.
+    . The Javascript code for closing a tab is now much shorter and likely
+      also more reliable as it does not rely on the most recent window
+      opened anymore.
+    . ->update_html() does not return anything anymore, just like
+      WWW::Mechanize does.
+    . C<repl> constructor now also accepts host:port
+    . Added `bcat.pl` example script to cat HTML to the browser.
+
 0.24 20100624
     ! ->find_link_dom now uses ->xpath and searches through frames
     ! Actually conform to WWW::Mechanize API by requiring a hashref
