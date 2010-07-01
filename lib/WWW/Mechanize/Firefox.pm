@@ -15,10 +15,9 @@ use HTTP::Cookies::MozRepl;
 use Scalar::Util qw'blessed weaken';
 use Encode qw(encode);
 use Carp qw(carp croak);
-use Scalar::Util qw(blessed);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.26';
+$VERSION = '0.27';
 
 =head1 NAME
 
@@ -1729,9 +1728,13 @@ sub click {
         $options{ xpath } = [
                        sprintf( q{//button[@name="%s"]}, $name),
                        sprintf( q{//input[(@type="button" or @type="submit") and @name="%s"]}, $name), 
+        ];
+        if ($options{ name } eq '') {
+            push @{ $options{ xpath }}, 
                        q{//button},
                        q{//input[(@type="button" or @type="submit")]},
-        ];
+            ;
+        };
         $options{ user_info } = "Button with name '$name'";
     };
     
@@ -1756,7 +1759,6 @@ sub click {
             if not $method;
         @buttons = $self->$method( $q, %options );
     };
-    
     #warn "Clicking id $buttons[0]->{id}";
     
     if ($options{ synchronize }) {
@@ -2265,7 +2267,7 @@ sub xpath {
     my $maybe  = delete $options{ maybe };
     
     # Construct some helper variables
-    my $zero_allowed = not $single;
+    my $zero_allowed = not ($single or $one);
     my $two_allowed = not( $single or $maybe );
     my $return_first = ($single or $one or $maybe);
     
@@ -2352,10 +2354,7 @@ sub selector {
 
 Expands the frame selectors (or C<1> to match all frames)
 into their respective DOM document nodes according to the current
-document.
-
-This method currently does not properly recurse downwards and will
-only expand one level of frames.
+document. All frames will be visited in breadth first order.
 
 This is mostly an internal method.
 
