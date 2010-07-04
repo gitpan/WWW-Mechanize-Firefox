@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               WWW-Mechanize-Firefox
-version:            0.28
+version:            0.29
 abstract:           use Firefox as if it were WWW::Mechanize
 author:
     - Max Maischein <corion@cpan.org>
