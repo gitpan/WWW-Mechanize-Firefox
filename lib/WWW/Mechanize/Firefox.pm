@@ -13,11 +13,11 @@ use MIME::Base64;
 use WWW::Mechanize::Link;
 use HTTP::Cookies::MozRepl;
 use Scalar::Util qw'blessed weaken';
-use Encode qw(encode);
+use Encode qw(encode decode);
 use Carp qw(carp croak);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.31';
+$VERSION = '0.32';
 
 =head1 NAME
 
@@ -407,12 +407,28 @@ sub unsafe_page_property_access {
 
 =head1 UI METHODS
 
-=head2 C<< $mech->addTab( OPTIONS ) >>
+=head2 C<< $mech->addTab( %options ) >>
 
-Creates a new tab. The tab will be automatically closed upon program exit.
+Creates a new tab and returns it.
+The tab will be automatically closed upon program exit.
 
 If you want the tab to remain open, pass a false value to the the C< autoclose >
 option.
+
+The recognized options are:
+
+=over 4
+
+=item *
+
+C<repl> - the repl to use. By default it will use C<< $mech->repl >>.
+
+=item *
+
+C<autoclose> - whether to automatically close the tab at program exit. Default is
+to close the tab.
+
+=back
 
 =cut
 
@@ -430,10 +446,7 @@ sub addTab {
           // No browser windows are open, so open a new one.
           win = window.open('about:blank');
         };
-        var b = win.getBrowser();
-        var t = b.addTab();
-        t.parentTabBox = b;
-        return t
+        return win.getBrowser().addTab();
     }
 JS
     if (not exists $options{ autoclose } or $options{ autoclose }) {
@@ -446,9 +459,11 @@ JS
 sub autoclose_tab {
     my ($self,$tab) = @_;
     my $release = join "",
-        q{var b=self.parentTabBox;},
-        q{self.parentTabBox=undefined;},
-        q{if(b){b.removeTab(self)};},
+        q<var p=self.parentNode;>,
+        q<while(p && p.tagName != "tabbrowser") {>,
+            q<p = p.parentNode>,
+        q<};>,
+        q<if(p){p.removeTab(self)};>,
     ;
     $tab->__release_action($release);
 };
@@ -467,6 +482,28 @@ function() {
 }
 JS
     return $selected_tab->();
+}
+
+=head2 C<< $mech->closeTab( $tab [,$repl] ) >>
+
+Close the given tab.
+
+=cut
+
+sub closeTab {
+    my ($self,$tab,$repl) = @_;
+    $repl ||= $self->repl;
+    my $close_tab = $repl->declare(<<'JS');
+function(tab) {
+    // find containing browser
+    var p = tab.parentNode;
+    while (p.tagName != "tabbrowser") {
+        p = p.parentNode;
+    };
+    if(p){p.removeTab(tab)};
+}
+JS
+    return $close_tab->($tab);
 }
 
 sub openTabs {
@@ -934,8 +971,7 @@ sub response {
     };   
 
     # We're cool!
-    my $c = $self->content;
-    return HTTP::Response->new(200,'',[],encode 'UTF-8', $c)
+    return HTTP::Response->new(200,'',[],$self->content_utf8)
 }
 *res = \&response;
 
@@ -972,11 +1008,11 @@ sub status {
     $_[0]->response->code
 };
 
-=head2 C<< $mech->reload( [BYPASS_CACHE] ) >>
+=head2 C<< $mech->reload( [$bypass_cache] ) >>
 
     $mech->reload();
 
-Reloads the current page. If C<BYPASS_CACHE>
+Reloads the current page. If C<$bypass_cache>
 is a true value, the browser is not allowed to
 use a cached page. This is the difference between
 pressing C<F5> (cached) and C<shift-F5> (uncached).
@@ -1081,7 +1117,9 @@ sub docshell {
 
   print $mech->content;
 
-Returns the current content of the tab as a scalar.
+Returns the current content of the tab as a scalar. The content
+does not decoded according to the encoding. It is returned
+as raw octets.
 
 This is likely not binary-safe.
 
@@ -1099,10 +1137,65 @@ sub content {
 function(d){
     var e = d.createElement("div");
     e.appendChild(d.documentElement.cloneNode(true));
-    return e.innerHTML;
+    return [e.innerHTML,d.inputEncoding];
 }
 JS
-    $html->($d);
+    # We return the raw bytes here.
+    my ($content,$encoding) = @{ $html->($d) };
+    return $content
+};
+
+=head2 C<< $mech->content_utf8 >>
+
+    print $mech->content_utf8;
+
+This always returns the content as a Unicode string. It tries
+to decode the raw content according to its input encoding.
+
+This method is very experimental.
+
+Don't use this method when trying to get at binary data.
+
+=cut
+
+sub content_utf8 {
+    my ($self, $d) = @_;
+    
+    my $rn = $self->repl->repl;
+    $d ||= $self->document; # keep a reference to it!
+    
+    my $html = $self->repl->declare(<<'JS');
+function(d){
+    var e = d.createElement("div");
+    e.appendChild(d.documentElement.cloneNode(true));
+    return [e.innerHTML,d.inputEncoding];
+}
+JS
+    # Decode the result to utf8
+    my ($content,$encoding) = @{ $html->($d) };
+    if ($encoding eq 'UTF-8') {
+        if (! utf8::is_utf8($content)) {
+            # Switch on UTF-8 flag
+            $content = Encode::decode($encoding, $content);
+        };
+    } else {
+        return decode($encoding, $content);
+    };
+};
+
+=head2 C<< $mech->content_encoding >>
+
+    print "The content is encoded as ", $mech->content_encoding;
+
+Returns the encoding that the content is in. This can be used
+to convert the content to UTF-8.
+
+=cut
+
+sub content_encoding {
+    my ($self, $d) = @_;
+    $d ||= $self->document; # keep a reference to it!
+    return $d->{inputEncoding};
 };
 
 =head2 C<< $mech->update_html( $html ) >>
@@ -1122,6 +1215,23 @@ sub update_html {
         $self->tab->{linkedBrowser}->loadURI($url);
     });
     return
+};
+
+=head2 C<< $mech->set_tab_content $tab, $html [,$repl] >>
+
+This is a more general method that allows you to replace
+the HTML of an arbitrary tab, and not only the tab that
+WWW::Mechanize::Firefox is associated with.
+
+=cut
+
+sub set_tab_content {
+    my ($self, $tab, $content, $repl) = @_;
+    $tab ||= $self->tab;
+    $repl ||= $self->repl;
+    my $data = encode_base64($content,'');
+    my $url = qq{data:text/html;base64,$data};
+    $tab->{linkedBrowser}->loadURI($url);
 };
 
 =head2 C<< $mech->save_content( $localname [, $resource_directory] [, %options ] ) >>
