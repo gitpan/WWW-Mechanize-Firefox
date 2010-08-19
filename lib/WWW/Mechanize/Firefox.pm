@@ -17,7 +17,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.32';
+$VERSION = '0.33';
 
 =head1 NAME
 
@@ -66,6 +66,10 @@ active tab will be used instead.
 
 C<create> - will create a new tab if no existing tab matching
 the criteria given in C<tab> can be found.
+
+=item *
+
+C<activate> - make the tab the active tab
 
 =item * 
 
@@ -176,6 +180,10 @@ sub new {
     die "No tab found"
         unless $args{tab};
         
+    if (delete $args{ activate }) {
+        $class->activateTab( $args{ tab }, $args{ repl });
+    };
+    
     $args{ response } ||= undef;
     $args{ current_form } ||= undef;
         
@@ -407,7 +415,38 @@ sub unsafe_page_property_access {
 
 =head1 UI METHODS
 
+=head2 C<< $mech->browser( [$repl] ) >>
+
+    my $b = $mech->browser();
+
+Returns the current Firefox browser instance, or opens a new browser
+window if none is available, and returns its browser instance.
+
+If you need to call this as a class method, pass in the L<MozRepl::RemoteObject>
+bridge to use.
+
+=cut
+
+sub browser {
+    my ($self,$repl) = @_;
+    $repl ||= $self->repl;
+    return $repl->declare(<<'JS')->();
+    function() {
+        var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
+                           .getService(Components.interfaces.nsIWindowMediator);
+        var win = wm.getMostRecentWindow('navigator:browser');
+        if (! win) {
+          // No browser windows are open, so open a new one.
+          win = window.open('about:blank');
+        };
+        return win.getBrowser()
+    }
+JS
+};
+
 =head2 C<< $mech->addTab( %options ) >>
+
+    my $new = $mech->addTab();
 
 Creates a new tab and returns it.
 The tab will be automatically closed upon program exit.
@@ -437,18 +476,8 @@ sub addTab {
     my $repl = $options{ repl } || $self->repl;
     my $rn = $repl->name;
 
-    my $tab = $repl->declare(<<'JS')->();
-    function (){
-        var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-                           .getService(Components.interfaces.nsIWindowMediator);
-        var win = wm.getMostRecentWindow('navigator:browser');
-        if (! win) {
-          // No browser windows are open, so open a new one.
-          win = window.open('about:blank');
-        };
-        return win.getBrowser().addTab();
-    }
-JS
+    my $tab = $self->browser( $repl )->addTab;
+
     if (not exists $options{ autoclose } or $options{ autoclose }) {
         $self->autoclose_tab($tab)
     };
@@ -473,15 +502,7 @@ sub autoclose_tab {
 sub selectedTab {
     my ($self,$repl) = @_;
     $repl ||= $self->repl;
-    my $selected_tab = $repl->declare(<<'JS');
-function() {
-    var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-                       .getService(Components.interfaces.nsIWindowMediator);
-    var win = wm.getMostRecentWindow('navigator:browser');
-    return win.getBrowser().selectedTab
-}
-JS
-    return $selected_tab->();
+    return $self->browser( $repl )->{tabContainer}->{selectedItem};
 }
 
 =head2 C<< $mech->closeTab( $tab [,$repl] ) >>
@@ -541,6 +562,23 @@ JS
     my $tabs = $open_tabs->();
     return @$tabs
 }
+
+=head2 C<< $mech->activateTab( [ $tab [, $repl ]] ) >>
+
+    $mech->activateTab( $mytab ); # bring to foreground
+    
+Activates the tab passed in. The tab defaults to the tab associated
+with the C<$mech> object.
+
+=cut
+
+sub activateTab {
+    my ($self, $tab, $repl ) = @_;
+    $tab ||= $self->tab;
+    $repl ||= $self->repl;
+    #$self->browser( $repl )->{selectedItem} = $tab;
+    $self->browser( $repl )->{tabContainer}->{selectedItem} = $tab;
+};
 
 =head2 C<< $mech->tab >>
 
@@ -956,6 +994,9 @@ sub response {
         if ($scheme and $scheme =~ /^https?/) {
             # We can only extract from a HTTP Response
             return $self->_extract_response( $js_res );
+        } elsif ($scheme and $scheme =~ /^file/) {
+            # We're cool!
+            return HTTP::Response->new( 200, '', ['Content-Encoding','UTF-8'], encode 'UTF-8' => $self->content);
         } else {
             # make up a response, below
             warn "Making up response for unknown scheme '$scheme'";
@@ -970,8 +1011,8 @@ sub response {
         return HTTP::Response->new(500)
     };   
 
-    # We're cool!
-    return HTTP::Response->new(200,'',[],$self->content_utf8)
+    # We're cool, except we don't know what we're doing here:
+    return HTTP::Response->new( 200, '', ['Content-Encoding','UTF-8'], encode 'UTF-8' => $self->content);
 }
 *res = \&response;
 
@@ -1117,9 +1158,8 @@ sub docshell {
 
   print $mech->content;
 
-Returns the current content of the tab as a scalar. The content
-does not decoded according to the encoding. It is returned
-as raw octets.
+This always returns the content as a Unicode string. It tries
+to decode the raw content according to its input encoding.
 
 This is likely not binary-safe.
 
@@ -1142,45 +1182,13 @@ function(d){
 JS
     # We return the raw bytes here.
     my ($content,$encoding) = @{ $html->($d) };
-    return $content
-};
-
-=head2 C<< $mech->content_utf8 >>
-
-    print $mech->content_utf8;
-
-This always returns the content as a Unicode string. It tries
-to decode the raw content according to its input encoding.
-
-This method is very experimental.
-
-Don't use this method when trying to get at binary data.
-
-=cut
-
-sub content_utf8 {
-    my ($self, $d) = @_;
-    
-    my $rn = $self->repl->repl;
-    $d ||= $self->document; # keep a reference to it!
-    
-    my $html = $self->repl->declare(<<'JS');
-function(d){
-    var e = d.createElement("div");
-    e.appendChild(d.documentElement.cloneNode(true));
-    return [e.innerHTML,d.inputEncoding];
-}
-JS
-    # Decode the result to utf8
-    my ($content,$encoding) = @{ $html->($d) };
-    if ($encoding eq 'UTF-8') {
-        if (! utf8::is_utf8($content)) {
-            # Switch on UTF-8 flag
-            $content = Encode::decode($encoding, $content);
-        };
-    } else {
-        return decode($encoding, $content);
+    if (! utf8::is_utf8($content)) {
+        # Switch on UTF-8 flag
+        # This should never happen, as JSON::XS (and JSON) should always
+        # already return proper UTF-8
+        $content = Encode::decode($encoding, $content);
     };
+    return $content
 };
 
 =head2 C<< $mech->content_encoding >>
@@ -1188,7 +1196,7 @@ JS
     print "The content is encoded as ", $mech->content_encoding;
 
 Returns the encoding that the content is in. This can be used
-to convert the content to UTF-8.
+to convert the content from UTF-8 back to its native encoding.
 
 =cut
 
@@ -1621,6 +1629,15 @@ use vars '%xpath_quote';
     #'[' => '\[',
     #']' => '[\]]',
 );
+
+# Return the default limiter if no other limiting option is set:
+sub _default_limiter {
+    my ($default, $options) = @_;
+    if (! grep { exists $options->{ $_ } } qw(single one maybe all)) {
+        $options->{ $default } = 1;
+    };
+    return ()
+};
 
 sub quote_xpath($) {
     local $_ = $_[0];
@@ -2068,20 +2085,24 @@ sub forms {
                      : \@res
 };
 
-=head2 C<< $mech->field $name, $value, [,\@pre_events [,\@post_events]] >>
+=head2 C<< $mech->field $selector, $value, [,\@pre_events [,\@post_events]] >>
 
   $mech->field( user => 'joe' );
   $mech->field( not_empty => '', [], [] ); # bypass JS validation
 
-Sets the field with the name to the given value.
+Sets the field with the name given in C<$selector> to the given value.
 Returns the value.
 
-Note that this uses the C<name> attribute of the HTML,
-not the C<id> attribute.
+The method understands very basic CSS selectors in the value for C<$selector>,
+like the L<HTML::Form> find_input() method.
 
-By passing the array reference C<PRE EVENTS>, you can indicate which
+A selector prefixed with '#' must match the id attribute of the input.
+A selector prefixed with '.' matches the class attribute. A selector
+prefixed with '^' or with no prefix matches the name attribute.
+
+By passing the array reference C<@pre_events>, you can indicate which
 Javascript events you want to be triggered before setting the value.
-C<POST EVENTS> contains the events you want to be triggered
+C<@post_events> contains the events you want to be triggered
 after setting the value.
 
 By default, the events set in the
@@ -2101,11 +2122,11 @@ sub field {
     );
 }
 
-=head2 C<< $mech->value( $name_or_element, [%options] ) >>
+=head2 C<< $mech->value( $selector_or_element, [%options] ) >>
 
     print $mech->value( 'user' );
 
-Returns the value of the field named C<NAME> or of the
+Returns the value of the field given by C<$selector_or_name> or of the
 DOM element passed in.
 
 The legacy form of
@@ -2115,6 +2136,10 @@ The legacy form of
 is also still supported but will likely be deprecated
 in favour of the C<< ->field >> method.
 
+For fields that can have multiple values, like a C<select> field,
+the method is context sensitive and returns the first selected
+value in scalar context and all values in list context.
+
 =cut
 
 sub value {
@@ -2123,7 +2148,7 @@ sub value {
         return $self->field($name => $value);
     } else {
         my ($self,$name,%options) = @_;
-        $self->get_set_value(
+        return $self->get_set_value(
             node => $self->current_form,
             %options,
             name => $name,
@@ -2145,45 +2170,160 @@ in addition to all keys that C<< $mech->xpath >> supports.
 
 =cut
 
-sub get_set_value {
+sub _field_by_name {
     my ($self,%options) = @_;
     my @fields;
     my $name  = delete $options{ name };
-    my $set_value = exists $options{ value };
-    my $value = delete $options{ value };
-    my $pre   = delete $options{pre}  || $self->{pre_value};
-    my $post  = delete $options{post} || $self->{post_value};
+    my $attr = 'name';
+    if ($name =~ s/^\^//) { # if it starts with ^, it's supposed to be a name
+        $attr = 'name'
+    } elsif ($name =~ s/^#//) {
+        $attr = 'id'
+    } elsif ($name =~ s/^\.//) {
+        $attr = 'class'
+    };
     if (blessed $name) {
         @fields = $name;
     } else {
         _default_limiter( single => \%options );
         @fields = $self->xpath(
-            sprintf( q{.//input[@name="%s"] | .//select[@name="%s"] | .//textarea[@name="%s"]}, 
-                                   $name,              $name,                 $name),
+            sprintf( q{.//input[@%s="%s"] | .//select[@%s="%s"] | .//textarea[@%s="%s"]}, 
+                               $attr,$name,          $attr,$name,          $attr,$name ),
             %options,
         );
     };
+    @fields
+}
+
+sub get_set_value {
+    my ($self,%options) = @_;
+    my $set_value = exists $options{ value };
+    my $value = delete $options{ value };
+    my $pre   = delete $options{pre}  || $self->{pre_value};
+    my $post  = delete $options{post} || $self->{post_value};
+    my $name  = delete $options{ name };
+    my @fields = $self->_field_by_name( name => $name, %options );
     $pre = [$pre]
         if (! ref $pre);
     $post = [$post]
-        if (! ref $pre);
+        if (! ref $post);
         
     if ($fields[0]) {
+        my $tag = $fields[0]->{tagName};
         if ($set_value) {
             for my $ev (@$pre) {
                 $fields[0]->__event($ev);
             };
 
-            $fields[0]->{value} = $value;
+            if ('select' eq $tag) {
+                $self->select($fields[0], $value);
+            } else {
+                $fields[0]->{value} = $value;
+            };
 
             for my $ev (@$post) {
                 $fields[0]->__event($ev);
             };
+        };
+        # What about 'checkbox'es/radioboxes?
+        
+        # We could save some work here for the simple case of single-select
+        # dropdowns by not enumerating all options
+        if ('SELECT' eq uc $tag) {
+            my @options = $self->xpath('.//option', node => $fields[0] );
+            my @values = map { $_->{value} } grep { $_->{selected} } @options;
+            if (wantarray) {
+                return @values
+            } else {
+                return $values[0];
+            }
+        } else {
+            return $fields[0]->{value}
         }
-        return $fields[0]->{value}
     } else {
         return
     }
+}
+
+=head2 C<< $mech->select( $name, $value ) >>
+
+=head2 C<< $mech->select( $name, \@values ) >>
+
+Given the name of a C<select> field, set its value to the value
+specified.  If the field is not C<< <select multiple> >> and the
+C<$value> is an array, only the B<first> value will be set. 
+Passing C<$value> as a hash with
+an C<n> key selects an item by number (e.g.
+C<< {n => 3} >> or C<< {n => [2,4]} >>).
+The numbering starts at 1.  This applies to the current form.
+
+If you have a field with C<< <select multiple> >> and you pass a single
+C<$value>, then C<$value> will be added to the list of fields selected,
+without clearing the others.  However, if you pass an array reference,
+then all previously selected values will be cleared.
+
+Returns true on successfully setting the value. On failure, returns
+false and calls C<< $self>warn() >> with an error message.
+
+=cut
+
+sub select {
+    my ($self, $name, $value) = @_;
+    my ($field) = $self->_field_by_name(
+        node => $self->current_form,
+        name => $name,
+        #%options,
+    );
+    
+    if (! $field) {
+        return
+    };
+    
+    my @options = $self->xpath( './/option', node => $field);
+    my @by_index;
+    my @by_value;
+    my $single = $field->{type} eq "select-one";
+    my $deselect;
+
+    if ('HASH' eq ref $value||'') {
+        for (keys %$value) {
+            $self->warn(qq{Unknown select value parameter "$_"})
+              unless $_ eq 'n';
+        }
+        
+        $deselect = ref $value->{n};
+        @by_index = ref $value->{n} ? @{ $value->{n} } : $value->{n};
+    } elsif ('ARRAY' eq ref $value||'') {
+        # clear all preselected values
+        $deselect = 1;
+        @by_value = @{ $value };
+    } else {
+        @by_value = $value;
+    };
+    
+    if ($deselect) {
+        for my $o (@options) {
+            $o->{selected} = 0;
+        }
+    };
+    
+    if ($single) {
+        # Only use the first element for single-element boxes
+        $#by_index = 0+@by_index ? 0 : -1;
+        $#by_value = 0+@by_value ? 0 : -1;
+    };
+    
+    # Select the items, either by index or by value
+    for my $idx (@by_index) {
+        $options[$idx-1]->{selected} = 1;
+    };
+    
+    for my $v (@by_value) {
+        my $option = $self->xpath( sprintf( './/option[@value="%s"]', quote_xpath $v) , node => $field, single => 1 );
+        $option->{selected} = 1;
+    };
+    
+    return @by_index + @by_value > 0;
 }
 
 =head2 C<< $mech->submit >>
@@ -2355,15 +2495,6 @@ sub set_visible {
         $visible_fields[ $idx ]->{value} = $values[ $idx ];
     }
 }
-
-# Return the default limiter if no other limiting option is set:
-sub _default_limiter {
-    my ($default, $options) = @_;
-    if (! grep { exists $options->{ $_ } } qw(single one maybe all)) {
-        $options->{ $default } = 1;
-    };
-    return ()
-};
 
 =head2 C<< $mech->is_visible $element >>
 
@@ -3076,6 +3207,17 @@ for information on how to possibly override the "Save As" dialog
 
 The public repository of this module is 
 L<http://github.com/Corion/www-mechanize-firefox>.
+
+=head1 SUPPORT
+
+The public support forum of this module is
+L<http://perlmonks.org/>.
+
+=head1 BUG TRACKER
+
+Please report bugs in this module via the RT CPAN bug queue at
+L<https://rt.cpan.org/Public/Dist/Display.html?Name=WWW-Mechanize-Firefox>
+or via mail to L<www-mechanize-firefox-Bugs@rt.cpan.org>.
 
 =head1 AUTHOR
 

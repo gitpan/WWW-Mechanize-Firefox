@@ -38,9 +38,11 @@ t/50-form-with-fields.t
 t/50-form2.html
 t/50-form2.t
 t/50-form3.html
+t/50-mech-activateTab.t
 t/50-mech-bufsize.t
 t/50-mech-closeTab.t
 t/50-mech-ct.t
+t/50-mech-encoding.t
 t/50-mech-event.t
 t/50-mech-get.t
 t/50-mech-multi-event.t
@@ -95,4 +97,8 @@ t/99-pod.t
 t/99-todo.t
 t/99-unix-text.t
 t/99-versions.t
+t/mixi_jp_index.html
+t/select.html
+t/select.t
+t/sophos_co_jp_index.html
 META.yml                                 Module meta-data (added by MakeMaker)
