@@ -17,7 +17,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.33';
+$VERSION = '0.34';
 
 =head1 NAME
 
@@ -33,7 +33,7 @@ WWW::Mechanize::Firefox - use Firefox as if it were WWW::Mechanize
   my $png = $mech->content_as_png();
 
 This module will let you automate Firefox through the
-Mozrepl plugin. You you need to have installed
+Mozrepl plugin. You need to have installed
 that plugin in your Firefox.
 
 For more examples see L<WWW::Mechanize::Firefox::Examples>.
@@ -1835,22 +1835,25 @@ sub find_all_links_dom {
   $mech->follow_link( xpath => '//a[text() = "Click here!"]' );
 
 Follows the given link. Takes the same parameters that C<find_link_dom>
-uses.
+uses. In addition, C<synchronize> can be passed to (not) force
+waiting for a new page to be loaded.
+
+Note that C<< ->follow_link >> will only try to follow link-like
+things like C<A> tags.
 
 =cut
 
 sub follow_link {
     my ($self,$link,%opts);
     if (@_ == 2) { # assume only a link parameter
-        ($self,$link) = @_
+        ($self,$link) = @_;
+        $self->click($link);
     } else {
         ($self,%opts) = @_;
         _default_limiter( one => \%opts );
         $link = $self->find_link_dom(%opts);
+        $self->click({ dom => $link, %opts });
     }
-    $self->synchronize( sub {
-        $link->__click();
-    });
 }
 
 =head2 C<< $mech->click $name [,$x ,$y] >>
@@ -1880,6 +1883,10 @@ C<xpath> - Find the element to click by the XPath query
 
 =item *
 
+C<dom> - Click on the passed DOM element
+
+=item *
+
 C<synchronize> - Synchronize the click (default is 1)
 
 Synchronizing means that WWW::Mechanize::Firefox will wait until
@@ -1902,7 +1909,9 @@ sub click {
     my %options;
     my @buttons;
     
-    if (ref $name and blessed($name) and $name->can('__click')) {
+    if (! defined $name) {
+        croak("->click called with undef link");
+    } elsif (ref $name and blessed($name) and $name->can('__click')) {
         $options{ dom } = $name;
     } elsif (ref $name eq 'HASH') { # options
         %options = %$name;
@@ -1935,7 +1944,7 @@ sub click {
         @buttons = $self->_option_query(%options);
     };
     #warn "Clicking id $buttons[0]->{id}";
-    
+        
     if ($options{ synchronize }) {
         $self->synchronize($self->events, sub { # ,'abort'
             $buttons[0]->__click();
@@ -2226,7 +2235,10 @@ sub get_set_value {
             };
         };
         # What about 'checkbox'es/radioboxes?
-        
+
+        # Don't bother to fetch the field's value if it's not wanted
+        return unless defined wantarray;
+
         # We could save some work here for the simple case of single-select
         # dropdowns by not enumerating all options
         if ('SELECT' eq uc $tag) {
@@ -3058,14 +3070,6 @@ This function is likely best implemented through C<< $mech->selector >>.
 C<< ->find_all_images >>
 
 This function is likely best implemented through C<< $mech->selector >>.
-
-=item *
-
-C<< ->field >>
-
-=item *
-
-C<< ->select >>
 
 =item *
 
