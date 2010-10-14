@@ -17,7 +17,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak);
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.34';
+$VERSION = '0.35';
 
 =head1 NAME
 
@@ -1943,7 +1943,6 @@ sub click {
     } else {
         @buttons = $self->_option_query(%options);
     };
-    #warn "Clicking id $buttons[0]->{id}";
         
     if ($options{ synchronize }) {
         $self->synchronize($self->events, sub { # ,'abort'
@@ -2211,7 +2210,10 @@ sub get_set_value {
     my $pre   = delete $options{pre}  || $self->{pre_value};
     my $post  = delete $options{post} || $self->{post_value};
     my $name  = delete $options{ name };
-    my @fields = $self->_field_by_name( name => $name, %options );
+    my @fields = $self->_field_by_name(
+                     name => $name, 
+                     user_info => "input with name '$name'",
+                     %options );
     $pre = [$pre]
         if (! ref $pre);
     $post = [$post]
@@ -2251,7 +2253,7 @@ sub get_set_value {
             }
         } else {
             return $fields[0]->{value}
-        }
+        };
     } else {
         return
     }
@@ -2337,6 +2339,96 @@ sub select {
     
     return @by_index + @by_value > 0;
 }
+
+=head2 C<< $mech->tick( $name, $value [, $set ] ) >>
+
+    $mech->tick("confirmation_box", 'yes');
+
+"Ticks" the first checkbox that has both the name and value associated with it
+on the current form. Dies if there is no named check box for that value.
+Passing in a false value as the third optional argument will cause the
+checkbox to be unticked.
+
+(Un)ticking the checkbox is done by sending a click event to it if needed.
+If C<$value> is C<undef>, the first checkbox matching C<$name> will 
+be (un)ticked.
+
+If C<$name> is a reference to a hash, that hash will be used
+as the options to C<< ->find_link_dom >> to find the element.
+
+=cut
+
+sub tick {
+    my ($self, $name, $value, $set) = @_;
+    $set = 1
+        if (@_ < 4);
+    my %options;
+    my @boxes;
+    
+    if (! defined $name) {
+        croak("->tick called with undef name");
+    } elsif (ref $name and blessed($name) and $name->can('__click')) {
+        $options{ dom } = $name;
+    } elsif (ref $name eq 'HASH') { # options
+        %options = %$name;
+    } else {
+        $options{ name } = $name;
+    };
+    
+    if (exists $options{ name }) {
+        my $attr = 'name';
+        if ($name =~ s/^\^//) { # if it starts with ^, it's supposed to be a name
+            $attr = 'name'
+        } elsif ($name =~ s/^#//) {
+            $attr = 'id'
+        } elsif ($name =~ s/^\.//) {
+            $attr = 'class'
+        };
+        $name = quotemeta($name);
+        $value = quotemeta($value) if $value;
+    
+        _default_limiter( one => \%options );
+        $options{ xpath } = [
+                       defined $value
+                       ? sprintf( q{//input[@type="checkbox" and @%s="%s" and @value="%s"]}, $attr, $name, $value)
+                       : sprintf( q{//input[@type="checkbox" and @%s="%s"]}, $attr, $name)
+        ];
+        $options{ user_info } =  defined $value
+                              ? "Checkbox with name '$name' and value '$value'"
+                              : "Checkbox with name '$name'";
+    };
+    
+    if ($options{ dom }) {
+        @boxes = $options{ dom };
+    } else {
+        @boxes = $self->_option_query(%options);
+    };
+    
+    my $target = $boxes[0];
+    my $is_set = $target->{checked} eq 'true';
+    if ($set xor $is_set) {
+        if ($set) {
+            $target->{checked}= 'checked';
+        } else {
+            $target->{checked}= undef;
+        };
+    };
+};
+
+=head2 C<< $mech->untick($name, $value) >>
+
+  $mech->untick('spam_confirm','yes',undef)
+
+Causes the checkbox to be unticked. Shorthand for 
+
+  $mech->tick($name,$value,undef)
+
+=cut
+
+sub untick {
+    my ($self, $name, $value) = @_;
+    $self->tick( $name, $value, undef );
+};
 
 =head2 C<< $mech->submit >>
 
@@ -3071,14 +3163,6 @@ C<< ->find_all_images >>
 
 This function is likely best implemented through C<< $mech->selector >>.
 
-=item *
-
-C<< ->tick >>
-
-=item *
-
-C<< ->untick >>
-
 =back
 
 =head2 Functions that will likely never be implemented
@@ -3139,10 +3223,6 @@ when searching through frames.
 
 Implement download progress via C<nsIWebBrowserPersist.progressListener>
 and our own C<nsIWebProgressListener>.
-
-=item *
-
-Make C<< ->click >> use C<< ->click_with_options >>
 
 =item *
 
@@ -3216,6 +3296,14 @@ L<http://github.com/Corion/www-mechanize-firefox>.
 
 The public support forum of this module is
 L<http://perlmonks.org/>.
+
+=head1 TALKS
+
+I've given two talks about this module at Perl conferences:
+
+L<http://corion.net/talks/WWW-Mechanize-FireFox/www-mechanize-firefox.html|German Perl Workshop, German>
+
+L<http://corion.net/talks/WWW-Mechanize-FireFox/www-mechanize-firefox.en.html|YAPC::Europe 2010, English>
 
 =head1 BUG TRACKER
 
