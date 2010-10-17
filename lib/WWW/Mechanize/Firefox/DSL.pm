@@ -3,8 +3,12 @@ use strict;
 use WWW::Mechanize::Firefox;
 use Carp qw(croak);
 
-use vars qw($VERSION);
-$VERSION = '0.35';
+use vars qw($VERSION @CARP_NOT);
+$VERSION = '0.36';
+
+@CARP_NOT = (qw[
+    WWW::Mechanize::Firefox
+]);
 
 =head1 NAME
 
@@ -32,7 +36,12 @@ again if I find that it is useless.
 
 sub import {
     my $target = caller;
-    my ($class, %options) = @_;
+    my ($class, %options);
+    if (@_ == 2) {
+        ($class, $options{ name }) = @_;
+    } else {
+        ($class, %options) = @_;
+    };
     my $name = delete $options{ name } || '$mech';
     my $mech = WWW::Mechanize::Firefox->new(%options);
     
@@ -50,7 +59,7 @@ package # hide from CPAN indexer
 our $VERSION # hide from my standard VERSION test
   = 1.000;
 use Scalar::Util "blessed";
-use mro;
+use MRO::Compat;
 sub import {
     my($_u, $o_r, $en) = @_;
     $en ||= caller;
@@ -78,7 +87,7 @@ Max Maischein C<corion@cpan.org> and Zsban Ambrus
 
 =head1 COPYRIGHT (c)
 
-Copyright 2009-2010 by Max Maischein C<corion@cpan.org>.
+Copyright 2009-2010 by Max Maischein C<corion@cpan.org> and Zsban Ambrus.
 
 =head1 LICENSE
 
