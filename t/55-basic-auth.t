@@ -23,9 +23,10 @@ if (! eval { require HTTP::Daemon; 1 }) {
 delete @ENV{qw(HTTP_PROXY http_proxy CGI_HTTP_PROXY)};
 
 my $mech = eval { WWW::Mechanize::Firefox->new( 
-    autodie => 0,
-    #log => [qw[debug]],
-)};
+        autodie => 0,
+        #log => [qw[debug]],
+    )
+};
 
 if (! $mech) {
     my $err = $@;
@@ -85,31 +86,31 @@ isa_ok $nsiLoginInfo, 'MozRepl::RemoteObject::Instance';
 
 $passwordManager->addLogin($nsiLoginInfo);
 
-# Dump all logins
-my $logins = $mech->repl->expr(<<'JS');
-    var pm = Components.classes["@mozilla.org/login-manager;1"].
-        getService(Components.interfaces.nsILoginManager);
-    pm.getAllLogins({});
+if (0) {
+    # Dump all logins
+    my $logins = $mech->repl->expr(<<'JS');
+        var pm = Components.classes["@mozilla.org/login-manager;1"].
+            getService(Components.interfaces.nsILoginManager);
+        pm.getAllLogins({});
 JS
-
-my $count = $logins->{length};
-diag "Logins: $count";
-
-for (0..$count-1) {
-    diag "---";
-    diag $logins->[$_]->{formSubmitURL};
-    diag $logins->[$_]->{hostname};
-    diag $logins->[$_]->{httpRealm};
-    diag $logins->[$_]->{password};
-    diag $logins->[$_]->{passwordField};
-    diag $logins->[$_]->{username};
-    diag $logins->[$_]->{usernameField};
+    my $count = $logins->{length};
+    diag "Logins: $count";
+    for (0..$count-1) {
+        diag "---";
+        diag $logins->[$_]->{formSubmitURL};
+        diag $logins->[$_]->{hostname};
+        diag $logins->[$_]->{httpRealm};
+        diag $logins->[$_]->{password};
+        diag $logins->[$_]->{passwordField};
+        diag $logins->[$_]->{username};
+        diag $logins->[$_]->{usernameField};
+    };
 };
 
 # Now, prepare to override the dialog:
 
 $mech->repl->expr(<<'JS');
-    netscape.security.PrivilegeManager.enablePrivilege('UniversalXPConnect');
+    alert(netscape.security.PrivilegeManager.enablePrivilege('UniversalXPConnect'));
 JS
 
 # This is an ugly interactive test :/

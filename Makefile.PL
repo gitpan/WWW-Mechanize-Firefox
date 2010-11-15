@@ -22,7 +22,7 @@ WriteMakefile1(
     'NAME'          => 'WWW::Mechanize::Firefox',
     'LICENSE'       => 'perl',
     'VERSION_FROM'  => 'lib/WWW/Mechanize/Firefox.pm', # finds $VERSION
-    'PREREQ_PM'     => { 'MozRepl::RemoteObject' => 0.13,
+    'PREREQ_PM'     => { 'MozRepl::RemoteObject' => 0.15,
                         'URI' => 0,
                         'HTTP::Response' => 0, # for interface compatibility with WWW::Mechanize
                         'HTML::Selector::XPath' => 0,
@@ -32,7 +32,7 @@ WriteMakefile1(
                         'Shell::Command' => 0, # just for cleanup of a test
                         'parent' => 0,
                         'Scalar::Util' => 1.14,
-                        'MRO::Compat'  => 0, # needed to provide mro.pm under <5.9.x, for ::DSL.pm
+                        'Object::Import'  => 0,
                       }, # e.g., Module::Name => 1.1
     ABSTRACT_FROM   => 'lib/WWW/Mechanize/Firefox.pm', # retrieve abstract from module
     AUTHOR          => 'Max Maischein <corion@cpan.org>',
