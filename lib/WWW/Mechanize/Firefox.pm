@@ -1,23 +1,24 @@
 package WWW::Mechanize::Firefox;
 use 5.006; #weaken
 use strict;
-use Time::HiRes;
+use Time::HiRes; # hires sleep()
 
 use MozRepl::RemoteObject;
 use URI;
 use Cwd;
-use File::Basename;
+use File::Basename qw(dirname);
 use HTTP::Response;
 use HTML::Selector::XPath 'selector_to_xpath';
 use MIME::Base64;
 use WWW::Mechanize::Link;
+use Firefox::Application;
 use HTTP::Cookies::MozRepl;
 use Scalar::Util qw'blessed weaken';
 use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.38';
+$VERSION = '0.39';
 
 =head1 NAME
 
@@ -108,8 +109,17 @@ waiting for a reply
 
 =item * 
 
+C<app> - a premade L<Firefox::Application>
+
+=item * 
+
 C<repl> - a premade L<MozRepl::RemoteObject> instance or a connection string
-suitable for initializing one.
+suitable for initializing one
+
+=item *
+
+C<use_queue> - whether to use the command queueing of L<MozRepl::RemoteObject>.
+Default is 1.
 
 =item * 
 
@@ -127,25 +137,25 @@ value is changed. By default this is C<[blur, change]>.
 
 sub new {
     my ($class, %args) = @_;
-    my $loglevel = delete $args{ log } || [qw[ error ]];
-    if (! ref $args{ repl }) {
-        my $ff = delete $args{ launch };
-        $args{ repl } = MozRepl::RemoteObject->install_bridge(
-            repl   => $args{ repl } || undef,
-            launch => $ff,
-            log => $loglevel,
+    
+    if (! ref $args{ app }) {
+        my @passthrough = qw(launch repl bufsize log use_queue);
+        my %options; @options{ @passthrough } = delete @args{ @passthrough };
+        $args{ app } = Firefox::Application->new(
+            %options
         );
     };
-    
+        
     if (my $tabname = delete $args{ tab }) {
         if (! ref $tabname) {
             if ($tabname eq 'current') {
-                $args{ tab } = $class->selectedTab($args{ repl });
+                $args{ tab } = $args{ app }->selectedTab();
             } else {
                 croak "Don't know what to do with tab '$tabname'. Did you mean qr{$tabname}?";
             };
         } else {
-            ($args{ tab }) = grep { $_->{title} =~ /$tabname/ } $class->openTabs($args{ repl });
+            ($args{ tab }) = grep { $_->{title} =~ /$tabname/ }
+                $args{ app }->openTabs();
             if (! $args{ tab }) {
                 if (! delete $args{ create }) {
                     croak "Couldn't find a tab matching /$tabname/";
@@ -159,19 +169,15 @@ sub new {
     };
     if (! $args{ tab }) {
         my @autoclose = exists $args{ autoclose } ? (autoclose => $args{ autoclose }) : ();
-        $args{ tab } = $class->addTab( repl => $args{ repl }, @autoclose );
+        $args{ tab } = $args{ app }->addTab( @autoclose );
         my $body = $args{ tab }->__dive(qw[ linkedBrowser contentWindow document body ]);
         $body->{innerHTML} = __PACKAGE__;
     };
 
     if (delete $args{ autoclose }) {
-        $class->autoclose_tab($args{ tab });
+        $args{ app }->autoclose_tab($args{ tab });
     };
     
-    if (my $bufsize = delete $args{ bufsize }) {
-        $args{ repl }->repl->client->telnet->max_buffer_length($bufsize);
-    };
-
     $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded error abort stop]];
     $args{ pre_value } ||= ['focus'];
     $args{ post_value } ||= ['change','blur'];
@@ -181,7 +187,7 @@ sub new {
         unless $args{tab};
         
     if (delete $args{ activate }) {
-        $class->activateTab( $args{ tab }, $args{ repl });
+        $args{ app }->activateTab( $args{ tab });
     };
     
     $args{ response } ||= undef;
@@ -192,16 +198,16 @@ sub new {
 
 sub DESTROY {
     my ($self) = @_;
-    #warn "Cleaning up mech";
     local $@;
-    my $repl = delete $self->{ repl };
-    if ($repl) {
+    my $app = delete $self->{ app };
+    if ($app) {
         undef $self->{tab};
         %$self = (); # wipe out all references we keep
-        # but keep $repl alive until we can dispose of it
+        # but keep $app alive until we can dispose of it
         # as the last thing, now:
-        $repl = undef;
+        $app = undef;
     };
+    #warn "FF cleaned up";
 }
 
 =head1 JAVASCRIPT METHODS
@@ -415,169 +421,23 @@ sub unsafe_page_property_access {
 
 =head1 UI METHODS
 
-=head2 C<< $mech->browser( [$repl] ) >>
+See also L<Firefox::Application> for how to add more than one tab
+and how to manipulate windows and tabs.
 
-    my $b = $mech->browser();
+=head2 C<< $mech->application() >>
 
-Returns the current Firefox browser instance, or opens a new browser
-window if none is available, and returns its browser instance.
+    my $ff = $mech->application();
 
-If you need to call this as a class method, pass in the L<MozRepl::RemoteObject>
-bridge to use.
-
-=cut
-
-sub browser {
-    my ($self,$repl) = @_;
-    $repl ||= $self->repl;
-    return $repl->declare(<<'JS')->();
-    function() {
-        var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-                           .getService(Components.interfaces.nsIWindowMediator);
-        var win = wm.getMostRecentWindow('navigator:browser');
-        if (! win) {
-          // No browser windows are open, so open a new one.
-          win = window.open('about:blank');
-        };
-        return win.getBrowser()
-    }
-JS
-};
-
-=head2 C<< $mech->addTab( %options ) >>
-
-    my $new = $mech->addTab();
-
-Creates a new tab and returns it.
-The tab will be automatically closed upon program exit.
-
-If you want the tab to remain open, pass a false value to the the C< autoclose >
-option.
-
-The recognized options are:
-
-=over 4
-
-=item *
-
-C<repl> - the repl to use. By default it will use C<< $mech->repl >>.
-
-=item *
-
-C<autoclose> - whether to automatically close the tab at program exit. Default is
-to close the tab.
-
-=back
+Returns the L<Firefox::Application> object for manipulating
+more parts of the Firefox UI and application.
 
 =cut
 
-sub addTab {
-    my ($self, %options) = @_;
-    my $repl = $options{ repl } || $self->repl;
-    my $rn = $repl->name;
-
-    my $tab = $self->browser( $repl )->addTab;
-
-    if (not exists $options{ autoclose } or $options{ autoclose }) {
-        $self->autoclose_tab($tab)
-    };
-    
-    $tab
-};
+sub application { $_[0]->{app} };
 
 sub autoclose_tab {
-    my ($self,$tab) = @_;
-    my $release = join "",
-        q<var p=self.parentNode;>,
-        q<while(p && p.tagName != "tabbrowser") {>,
-            q<p = p.parentNode>,
-        q<};>,
-        q<if(p){p.removeTab(self)};>,
-    ;
-    $tab->__release_action($release);
-};
-
-# This should maybe become MozRepl::Firefox::Util?
-# or MozRepl::Firefox::UI ?
-sub selectedTab {
-    my ($self,$repl) = @_;
-    $repl ||= $self->repl;
-    return $self->browser( $repl )->{tabContainer}->{selectedItem};
-}
-
-=head2 C<< $mech->closeTab( $tab [,$repl] ) >>
-
-Close the given tab.
-
-=cut
-
-sub closeTab {
-    my ($self,$tab,$repl) = @_;
-    $repl ||= $self->repl;
-    my $close_tab = $repl->declare(<<'JS');
-function(tab) {
-    // find containing browser
-    var p = tab.parentNode;
-    while (p.tagName != "tabbrowser") {
-        p = p.parentNode;
-    };
-    if(p){p.removeTab(tab)};
-}
-JS
-    return $close_tab->($tab);
-}
-
-sub openTabs {
-    my ($self,$repl) = @_;
-    $repl ||= $self->repl;
-    my $open_tabs = $repl->declare(<<'JS');
-function() {
-    var idx = 0;
-    var tabs = [];
-    
-    var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-                       .getService(Components.interfaces.nsIWindowMediator);
-    var win = wm.getMostRecentWindow('navigator:browser');
-    if (win) {
-        var browser = win.getBrowser();
-        Array.prototype.forEach.call(
-            browser.tabContainer.childNodes, 
-            function(tab) {
-                var d = tab.linkedBrowser.contentWindow.document;
-                tabs.push({
-                    location: d.location.href,
-                    document: d,
-                    title:    d.title,
-                    "id":     d.id,
-                    index:    idx++,
-                    panel:    tab.linkedPanel,
-                    tab:      tab,
-                });
-            });
-    };
-
-    return tabs;
-}
-JS
-    my $tabs = $open_tabs->();
-    return @$tabs
-}
-
-=head2 C<< $mech->activateTab( [ $tab [, $repl ]] ) >>
-
-    $mech->activateTab( $mytab ); # bring to foreground
-    
-Activates the tab passed in. The tab defaults to the tab associated
-with the C<$mech> object.
-
-=cut
-
-sub activateTab {
-    my ($self, $tab, $repl ) = @_;
-    $tab ||= $self->tab;
-    $repl ||= $self->repl;
-    #$self->browser( $repl )->{selectedItem} = $tab;
-    $self->browser( $repl )->{tabContainer}->{selectedItem} = $tab;
+    my $self = shift;
+    $self->application->autoclose_tab(@_);
 };
 
 =head2 C<< $mech->tab >>
@@ -657,6 +517,7 @@ JS
     $lsn->__release_action('self.source.removeProgressListener(self)');
     $lsn->__on_destroy(sub {
         # Clean up some memory leaks
+        #warn "Listener removed";
         $_[0]->bridge->remove_callback(values %handlers);
     });
     $source->addProgressListener($lsn,$NOTIFY_STATE_DOCUMENT);
@@ -673,7 +534,7 @@ This method is special to WWW::Mechanize::Firefox.
 
 =cut
 
-sub repl { $_[0]->{repl} };
+sub repl { $_[0]->application->repl };
 
 =head2 C<< $mech->events >>
 
@@ -1100,7 +961,7 @@ sub back {
 
     $mech->forward();
 
-Goes one page back in the page history.
+Goes one page forward in the page history.
 
 Returns the (new) response.
 
@@ -1229,23 +1090,6 @@ sub update_html {
         $self->tab->{linkedBrowser}->loadURI($url);
     });
     return
-};
-
-=head2 C<< $mech->set_tab_content $tab, $html [,$repl] >>
-
-This is a more general method that allows you to replace
-the HTML of an arbitrary tab, and not only the tab that
-WWW::Mechanize::Firefox is associated with.
-
-=cut
-
-sub set_tab_content {
-    my ($self, $tab, $content, $repl) = @_;
-    $tab ||= $self->tab;
-    $repl ||= $self->repl;
-    my $data = encode_base64($content,'');
-    my $url = qq{data:text/html;base64,$data};
-    $tab->{linkedBrowser}->loadURI($url);
 };
 
 =head2 C<< $mech->save_content( $localname [, $resource_directory] [, %options ] ) >>

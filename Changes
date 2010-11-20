@@ -1,3 +1,25 @@
+0.39 20101120
+    . Add Firefox::Application to contain UI manipulation things.
+      The ->{repl} element is now not a hash element of WWW::Mechanize::Firefox
+      anymore, but you shouldn't access the guts of an object anyway.
+      Use ->repl instead.
+    ! ->addTab , ->createTab, ->activateTab and ->selectedTab have been moved
+      to Firefox::Application.
+      If you used these functions before, change:
+          $mech->addTab( ... )
+      to 
+          $mech->application->addTab( ... )
+    ! ->set_tab_content has been moved to Firefox::Application
+    ! WWW::Mechanize::Firefox (by virtue of Firefox::Application) now uses
+      the command queueing feature of MozRepl::RemoteObject. The change
+      should be invisible in theory, but as Javascript objects now experience
+      a short delay in when they get released, it might change the behaviour
+      of Firefox. If you experience different behaviour, please test with
+          use_queue => 1
+      and
+          use_queue => 0
+      whether the difference actually stems from the queuing behaviour.
+
 0.38 20101119
     . Fix test for checking whether JS is enabled and whether it can be
       disabled to also work when the NoScript add-on is not installed.
