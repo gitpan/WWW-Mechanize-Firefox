@@ -12,13 +12,14 @@ use HTML::Selector::XPath 'selector_to_xpath';
 use MIME::Base64;
 use WWW::Mechanize::Link;
 use Firefox::Application;
+use MozRepl::RemoteObject ();
 use HTTP::Cookies::MozRepl;
 use Scalar::Util qw'blessed weaken';
 use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.39';
+$VERSION = '0.40';
 
 =head1 NAME
 
@@ -299,15 +300,14 @@ JS
 sub js_errors {
     my ($self,$page) = @_;
     my $console = $self->js_console;
-    my $getErrorMessages = $self->repl->declare(<<'JS');
+    my $getErrorMessages = $self->repl->declare(<<'JS', 'list');
     function (consoleService) {
         var out = {};
         consoleService.getMessageArray(out, {});
         return out.value || []
     };
 JS
-    my $m = $getErrorMessages->($console);
-    @$m
+    $getErrorMessages->($console);
 }
 
 =head2 C<< $mech->clear_js_errors >>
@@ -379,13 +379,13 @@ JS
         };
     };
     
-    my $eval_in_sandbox = $self->repl->declare(<<'JS');
+    my $eval_in_sandbox = $self->repl->declare(<<'JS', 'list');
     function (w,d,str,env) {
         var unsafeWin = w.wrappedJSObject;
         var safeWin = XPCNativeWrapper(unsafeWin);
         var sandbox = Components.utils.Sandbox(safeWin);
         sandbox.window = safeWin;
-        sandbox.document = d; // sandbox.window.document;
+        sandbox.document = d;
         // Transfer the environment
         for (var e in env) {
             sandbox[e] = env[e]
@@ -397,7 +397,7 @@ JS
     };
 JS
     $window ||= $self->tab->{linkedBrowser}->{contentWindow};
-    return @{ $eval_in_sandbox->($window,$doc,$str,$js_env) };
+    return $eval_in_sandbox->($window,$doc,$str,$js_env);
 };
 *eval = \&eval_in_page;
 
@@ -1040,7 +1040,7 @@ sub content {
     my $rn = $self->repl->repl;
     my $d = $self->document; # keep a reference to it!
     
-    my $html = $self->repl->declare(<<'JS');
+    my $html = $self->repl->declare(<<'JS', 'list');
 function(d){
     var e = d.createElement("div");
     e.appendChild(d.documentElement.cloneNode(true));
@@ -1048,7 +1048,7 @@ function(d){
 }
 JS
     # We return the raw bytes here.
-    my ($content,$encoding) = @{ $html->($d) };
+    my ($content,$encoding) = $html->($d);
     if (! utf8::is_utf8($content)) {
         # Switch on UTF-8 flag
         # This should never happen, as JSON::XS (and JSON) should always
@@ -2730,9 +2730,9 @@ JS
     !!$_is_visible->($options{dom});
 };
 
-=head2 C<< $mech->wait_until_invisible $element >>
+=head2 C<< $mech->wait_until_invisible( $element ) >>
 
-=head2 C<< $mech->wait_until_invisible %options >>
+=head2 C<< $mech->wait_until_invisible( %options ) >>
 
   $mech->wait_until_invisible( $please_wait );
 
@@ -2862,19 +2862,27 @@ sub expand_frames {
 
 =head1 IMAGE METHODS
 
-=head2 C<< $mech->content_as_png [$tab, \%coordinates ] >>
+=head2 C<< $mech->content_as_png( [$tab, \%coordinates ] ) >>
 
     my $png_data = $mech->content_as_png();
 
 Returns the given tab or the current page rendered as PNG image.
 
 All parameters are optional. 
- 
-TAB defaults to current TAB.
+
+=over 4
+
+=item *
+
+C<$tab> defaults to the current tab.
+
+=item *
 
 If the coordinates are given, that rectangle will be cut out.
 The coordinates should be a hash with the four usual entries,
 C<left>,C<top>,C<width>,C<height>.
+
+=back
 
 This is specific to WWW::Mechanize::Firefox.
 
@@ -2924,7 +2932,7 @@ JS
     return decode_base64($screenshot->($tab, $rect))
 };
 
-=head2 C<< $mech->element_as_png $element >>
+=head2 C<< $mech->element_as_png( $element ) >>
 
     my $shiny = $mech->selector('#shiny', single => 1);
     my $i_want_this = $mech->element_as_png($shiny);
@@ -2941,7 +2949,7 @@ sub element_as_png {
     return $self->content_as_png($tab, $pos);
 };
 
-=head2 C<< $mech->element_coordinates $element >>
+=head2 C<< $mech->element_coordinates( $element ) >>
 
     my $shiny = $mech->selector('#shiny', single => 1);
     my ($pos) = $mech->element_coordinates($shiny);

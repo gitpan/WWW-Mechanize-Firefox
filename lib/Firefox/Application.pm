@@ -6,7 +6,7 @@ use MIME::Base64;
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.39';
+$VERSION = '0.40';
 
 =head1 NAME
 
@@ -211,7 +211,7 @@ sub updateitems {
     my ($self, %options) = @_;
     my $repl = delete $options{ repl } || $self->repl;
     my $type = $options{type} || 'ANY';
-    my $addons_js = $repl->declare(sprintf <<'JS', $type);
+    my $addons_js = $repl->declare(sprintf( <<'JS', $type), 'list');
     function () {
         var em = Components.classes["@mozilla.org/extensions/manager;1"]
                     .getService(Components.interfaces.nsIExtensionManager);
@@ -221,7 +221,7 @@ sub updateitems {
         return list
    };
 JS
-    @{ $addons_js->() };
+    $addons_js->()
 };
 
 =head1 UI METHODS
@@ -318,7 +318,7 @@ Returns a list of information about the currently open tabs.
 sub openTabs {
     my ($self,$repl) = @_;
     $repl ||= $self->repl;
-    my $open_tabs = $repl->declare(<<'JS');
+    my $open_tabs = $repl->declare(<<'JS', 'list');
 function() {
     var idx = 0;
     var tabs = [];
@@ -347,8 +347,7 @@ function() {
     return tabs;
 }
 JS
-    my $tabs = $open_tabs->();
-    return @$tabs
+    $open_tabs->();
 }
 
 =head2 C<< $ff->activateTab( [ $tab [, $repl ]] ) >>
@@ -408,7 +407,9 @@ sub autoclose_tab {
     $tab->__release_action($release);
 };
 
-=head2 C<< $ff->set_tab_content $tab, $html [,$repl] >>
+=head2 C<< $ff->set_tab_content( $tab, $html [,$repl] ) >>
+
+    $ff->set_tab_content('<html><h1>Hello</h1></html>');
 
 This is a more general method that allows you to replace
 the HTML of an arbitrary tab, and not only the tab that
