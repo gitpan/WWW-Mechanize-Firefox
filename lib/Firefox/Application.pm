@@ -6,7 +6,7 @@ use MIME::Base64;
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.40';
+$VERSION = '0.41';
 
 =head1 NAME
 
@@ -89,6 +89,7 @@ sub new {
 sub DESTROY {
     my ($self) = @_;
     local $@;
+    #warn "App cleaning up";
     if (my $repl = delete $self->{ repl }) {
         %$self = (); # wipe out all references we keep
         # but keep $repl alive until we can dispose of it

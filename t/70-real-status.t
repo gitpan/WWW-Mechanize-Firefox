@@ -3,7 +3,9 @@ use WWW::Mechanize::Firefox;
 use Time::HiRes;
 use Test::More;
 
-my $mech = eval {WWW::Mechanize::Firefox->new()};
+my $mech = eval {WWW::Mechanize::Firefox->new(
+    #log => [qw[debug]],
+)};
 
 if (! $mech) {
     my $err = $@;
@@ -24,13 +26,14 @@ $mech->get('http://doesnotexist.example');
 $response = $mech->response;
 
 isn't $response, undef, "We identified a response";
-like $response->code, qr/^(404|500)$/, 'We got a good response for a nonexistent domain';
+like $response->code, qr/^(404|5\d\d)$/, 'We got a good response for a nonexistent domain';
 ok ! $mech->success, "And the response is not considered a success";
 
 $response = $mech->get('http://doesnotexist.example');
 
 isn't $response, undef, "We identified a response, directly";
-like $response->code, qr/^(404|500)$/, 'We got a good response for a nonexistent domain';
+like $response->code, qr/^(404|5\d\d)$/, 'We got a good response for a nonexistent domain';
 ok ! $mech->success, "And the response is not considered a success";
 
 undef $mech;
+$MozRepl::RemoteObject::WARN_ON_LEAKS = 1;

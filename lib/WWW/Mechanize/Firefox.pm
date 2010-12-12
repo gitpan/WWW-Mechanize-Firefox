@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.40';
+$VERSION = '0.41';
 
 =head1 NAME
 
@@ -141,7 +141,8 @@ sub new {
     
     if (! ref $args{ app }) {
         my @passthrough = qw(launch repl bufsize log use_queue);
-        my %options; @options{ @passthrough } = delete @args{ @passthrough };
+        my %options = map { exists $args{ $_ } ? ($_ => delete $args{ $_ }) : () } 
+                      @passthrough;
         $args{ app } = Firefox::Application->new(
             %options
         );
@@ -200,9 +201,7 @@ sub new {
 sub DESTROY {
     my ($self) = @_;
     local $@;
-    my $app = delete $self->{ app };
-    if ($app) {
-        undef $self->{tab};
+    if (my $app = delete $self->{ app }) {
         %$self = (); # wipe out all references we keep
         # but keep $app alive until we can dispose of it
         # as the last thing, now:
@@ -479,23 +478,22 @@ in different progress listeners at the same time.
 
 sub progress_listener {
     my ($mech,$source,%handlers) = @_;
-    my $NOTIFY_STATE_DOCUMENT = $mech->repl->expr('Components.interfaces.nsIWebProgress.NOTIFY_STATE_DOCUMENT');
+    my $NOTIFY_STATE_DOCUMENT = $mech->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_STATE_DOCUMENT');
     my ($obj) = $mech->repl->expr('new Object');
     for my $key (keys %handlers) {
         $obj->{$key} = $handlers{$key};
     };
+    #warn "Listener created";
     
     my $mk_nsIWebProgressListener = $mech->repl->declare(<<'JS');
     function (myListener,source) {
         myListener.source = source;
-        //const STATE_START = Components.interfaces.nsIWebProgressListener.STATE_START;
-        //const STATE_STOP = Components.interfaces.nsIWebProgressListener.STATE_STOP;
-        var callbacks = ['onStateChange',
-                       'onLocationChange',
+        var callbacks = ["onStateChange",
+                       "onLocationChange",
                        "onProgressChange",
                        "onStatusChange",
                        "onSecurityChange",
-                            ];
+        ];
         for (var h in callbacks) {
             var e = callbacks[h];
             if (! myListener[e]) {
@@ -513,12 +511,16 @@ sub progress_listener {
     }
 JS
     
+    # Declare it here so we don't close over $lsn!
+    my $release = sub {
+        #warn "Listener removed";
+        $_[0]->bridge->remove_callback(values %handlers);
+    };
     my $lsn = $mk_nsIWebProgressListener->($obj,$source);
     $lsn->__release_action('self.source.removeProgressListener(self)');
     $lsn->__on_destroy(sub {
         # Clean up some memory leaks
-        #warn "Listener removed";
-        $_[0]->bridge->remove_callback(values %handlers);
+        $release->(@_)
     });
     $source->addProgressListener($lsn,$NOTIFY_STATE_DOCUMENT);
     $lsn
@@ -651,45 +653,69 @@ sub get_local {
 
 # Should I port this to Perl?
 # Should this become part of MozRepl::RemoteObject?
+# This should get passed 
 sub _addEventListener {
-    my ($self,$browser,$events) = @_;
-    $events ||= $self->events;
-    $events = [$events]
-        unless ref $events;
+    my ($self,@args) = @_;
+    if (@args <= 2 and ref($args[0]) eq 'MozRepl::RemoteObject::Instance') {
+        @args = [@args];
+    };
+    #use Data::Dumper;
+    #local $Data::Dumper::Maxdepth = 2;
+    #print Dumper \@args;
+    for (@args) {
+        $_->[1] ||= $self->events;
+        $_->[1] = [$_->[1]]
+            unless ref $_->[1];
+    };
+    # Now, flatten the arg list again...
+    @args = map { @$_ } @args;
 
     # This registers multiple events for a one-shot event
     my $make_semaphore = $self->repl->declare(<<'JS');
-function(browser,events) {
-    var lock = {};
-    lock.busy = 0;
-    var b = browser;
+function() {
+    var lock = { "busy": 0, "event" : null };
     var listeners = [];
-    for( var i = 0; i < events.length; i++) {
-        var evname = events[i];
-        var callback = (function(listeners,evname){
-            return function(e) {
-                lock.busy++;
-                lock.event = evname;
-                lock.js_event = {};
-                lock.js_event.target = e.originalTarget;
-                lock.js_event.type = e.type;
-                for( var j = 0; j < listeners.length; j++) {
-                    b.removeEventListener(listeners[j][0],listeners[j][1],true);
+    var pairs = arguments;
+    for( var k = 0; k < pairs.length ; k++) {
+        var b = pairs[k];
+        k++;
+        var events = pairs[k];
+        
+        for( var i = 0; i < events.length; i++) {
+            var evname = events[i];
+            var callback = (function(listeners,evname){
+                return function(e) {
+                    if (! lock.busy) {
+                        lock.busy++;
+                        lock.event = e.type;
+                        lock.js_event = {};
+                        lock.js_event.target = e.originalTarget;
+                        lock.js_event.type = e.type;
+                        //alert("Caught first event " + e.type + " " + e.message);
+                    } else {
+                        //alert("Caught duplicate event " + e.type + " " + e.message);
+                    };
+                    for( var j = 0; j < listeners.length; j++) {
+                        listeners[j][0].removeEventListener(listeners[j][1],listeners[j][2],true);
+                    };
                 };
-            };
-        })(listeners,evname);
-        listeners.push([evname,callback]);
-        b.addEventListener(evname,callback,true);
+            })(listeners,evname);
+            listeners.push([b,evname,callback]);
+            b.addEventListener(evname,callback,true);
+        };
     };
     return lock
 }
 JS
-    return $make_semaphore->($browser,$events);
+    # $browser,$events
+    return $make_semaphore->(@args);
 };
 
 sub _wait_while_busy {
     my ($self,@elements) = @_;
     # Now do the busy-wait
+    # Should this also include a ->poll()
+    # and a callback?
     while (1) {
         for my $element (@elements) {
             if ((my $s = $element->{busy} || 0) >= 1) {
@@ -735,9 +761,9 @@ sub _install_response_header_listener {
     weaken $self;
     
     # These should be cached and optimized into one hash query
-    my $STATE_STOP = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_STOP');
-    my $STATE_IS_DOCUMENT = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT');
-    my $STATE_IS_WINDOW = $self->repl->expr('Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW');
+    my $STATE_STOP = $self->repl->constant('Components.interfaces.nsIWebProgressListener.STATE_STOP');
+    my $STATE_IS_DOCUMENT = $self->repl->constant('Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT');
+    my $STATE_IS_WINDOW = $self->repl->constant('Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW');
 
     my $state_change = sub {
         my ($progress,$request,$flags,$status) = @_;
@@ -797,10 +823,12 @@ sub synchronize {
     
     # 'load' on linkedBrowser is good for successfull load
     # 'error' on tab is good for failed load :-(
+    # Can we add more listeners to one existing lock?
     my $b = $self->tab->{linkedBrowser};
-    my $load_lock = $self->_addEventListener($b,$events);
+    my $load_lock = $self->_addEventListener([$b,$events],[$self->tab,$events]);
     $callback->();
-    $self->_wait_while_busy($load_lock);
+    my $ev = $self->_wait_while_busy($load_lock);
+    #warn "$load_lock->{id} caught $load_lock->{event} ($ev->{event})";
     
     if ($need_response) {
         #warn "Returning response";
@@ -826,8 +854,7 @@ sub _headerVisitor {
 sub _extract_response {
     my ($self,$request) = @_;
     
-    #warn $request->{name};
-    my $nsIHttpChannel = $self->repl->expr('Components.interfaces.nsIHttpChannel');
+    my $nsIHttpChannel = $self->repl->constant('Components.interfaces.nsIHttpChannel');
     my $httpChannel = $request->QueryInterface($nsIHttpChannel);
     
     my @headers;
@@ -933,7 +960,7 @@ sub reload {
     my ($self, $bypass_cache) = @_;
     $bypass_cache ||= 0;
     if ($bypass_cache) {
-        $bypass_cache = $self->repl->expr('nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE');
+        $bypass_cache = $self->repl->constant('nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE');
     };
     $self->synchronize( sub {
         $self->tab->{linkedBrowser}->reloadWithFlags($bypass_cache);
@@ -1036,8 +1063,6 @@ It also currently only works for HTML pages.
 
 sub content {
     my ($self) = @_;
-    
-    my $rn = $self->repl->repl;
     my $d = $self->document; # keep a reference to it!
     
     my $html = $self->repl->declare(<<'JS', 'list');
@@ -1050,9 +1075,11 @@ JS
     # We return the raw bytes here.
     my ($content,$encoding) = $html->($d);
     if (! utf8::is_utf8($content)) {
+        #warn "Switching on UTF-8 (from $encoding)";
         # Switch on UTF-8 flag
         # This should never happen, as JSON::XS (and JSON) should always
         # already return proper UTF-8
+        # But it does happen.
         $content = Encode::decode($encoding, $content);
     };
     return $content
@@ -1830,8 +1857,10 @@ sub xpath {
             #warn "Invalid document" unless $doc;
 
             my $n = $options{ node } || $doc;
-            #warn "$nesting>Searching @$query in $doc->{title}";
-            push @res, map { $doc->__xpath($_, $n) } @$query;
+            #warn ">Searching @$query in $doc->{title}";
+            my @found = map { $doc->__xpath($_, $n) } @$query;
+            #warn "Found $_->{tagName}" for @found;
+            push @res, @found;
             
             # A small optimization to return if we already have enough elements
             # We can't do this on $return_first as there might be more elements
@@ -2589,7 +2618,7 @@ sub set_fields {
     if (! $f) {
         croak "Can't set fields: No current form set.";
     };
-    $self->do_set_fields($self, form => $f, fields => \%fields);
+    $self->do_set_fields(form => $f, fields => \%fields);
 };
 
 sub do_set_fields {
@@ -3010,6 +3039,12 @@ In Firefox, the C<name> attribute of links seems always
 to be present on links, even if it's empty. This is in
 difference to WWW::Mechanize, where the C<name> attribute
 can be C<undef>.
+
+=head2 Frame tags
+
+Firefox is much less lenient than WWW::Mechanize when it comes
+to FRAME tags. A page will not contain a FRAME tag if it contains
+content other than the FRAMESET. WWW::Mechanize has no such restriction.
 
 =head2 Unsupported Methods
 

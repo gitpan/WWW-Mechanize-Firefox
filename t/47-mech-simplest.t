@@ -5,7 +5,7 @@ use WWW::Mechanize::Firefox;
 
 my $mech = eval { WWW::Mechanize::Firefox->new( 
     autodie => 0,
-    #log => [qw[debug]]
+    #log => [qw[debug]],
 )};
 
 if (! $mech) {
@@ -13,10 +13,7 @@ if (! $mech) {
     plan skip_all => "Couldn't connect to MozRepl: $@";
     exit
 } else {
-    plan tests => 2;
+    plan tests => 1;
 };
 
 isa_ok $mech, 'WWW::Mechanize::Firefox';
-
-is $mech->ct, 'text/html', "Content-type";
-

@@ -32,6 +32,9 @@ README
 README.mkdn
 t/01-mech-destroy.t
 t/401-server
+t/47-mech-memleak2.t
+t/47-mech-ref-memleak.t
+t/47-mech-simplest.t
 t/48-mech-launch.t
 t/49-mech-get-file.html
 t/49-mech-get-file.t
@@ -56,13 +59,18 @@ t/50-mech-multi-event.t
 t/50-mech-new-dsl.t
 t/50-mech-new.t
 t/50-mech-save-dialog.t
+t/50-mech-set-fields-875912.htm
+t/50-mech-set-fields-875912.t
 t/50-mech-status.t
 t/50-popup.t
 t/50-tick.html
 t/50-tick.t
+t/51-empty-page.html
 t/51-mech-field-frameset.html
 t/51-mech-field.t
 t/51-mech-form-with-fields.t
+t/51-mech-links-base.html
+t/51-mech-links-nobase.html
 t/51-mech-links.t
 t/51-mech-sandbox.html
 t/51-mech-sandbox.t
@@ -110,6 +118,7 @@ t/99-todo.t
 t/99-unix-text.t
 t/99-versions.t
 t/mixi_jp_index.html
+t/pm875128.pl
 t/select.html
 t/select.t
 t/sophos_co_jp_index.html
