@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.41';
+$VERSION = '0.42';
 
 =head1 NAME
 
@@ -181,6 +181,7 @@ sub new {
     };
     
     $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded error abort stop]];
+    $args{ on_event } ||= undef;
     $args{ pre_value } ||= ['focus'];
     $args{ post_value } ||= ['change','blur'];
     $args{ frames } ||= 1; # we default to searching frames
@@ -551,6 +552,23 @@ This method is special to WWW::Mechanize::Firefox.
 
 sub events { $_[0]->{events} = $_[1] if (@_ > 1); $_[0]->{events} };
 
+=head2 C<< $mech->on_event >>
+
+  $mech->on_event(1); # prints every page load event
+
+  # or give it a callback
+  $mech->on_event(sub { warn "Page loaded with $ev->{name} event" });
+
+Gets/sets the notification handler for the Javascript event
+that finished a page load. Set it to C<1> to output via C<warn>,
+or a code reference to call it with the event.
+
+This method is special to WWW::Mechanize::Firefox.
+
+=cut
+
+sub on_event { $_[0]->{on_event} = $_[1] if (@_ > 1); $_[0]->{on_event} };
+
 =head2 C<< $mech->cookies >>
 
   my $cookie_jar = $mech->cookies();
@@ -765,6 +783,34 @@ sub _install_response_header_listener {
     my $STATE_IS_DOCUMENT = $self->repl->constant('Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT');
     my $STATE_IS_WINDOW = $self->repl->constant('Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW');
 
+    my $make_state_change = $self->repl->declare(<<'JS');
+        function (cb) {
+            const STATE_STOP = Components.interfaces.nsIWebProgressListener.STATE_STOP;
+            const STATE_IS_DOCUMENT = Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT;
+            const STATE_IS_WINDOW = Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW;
+            
+            return function (progress,request,flags,status) {
+                if (flags & (STATE_STOP|STATE_IS_DOCUMENT) == (STATE_STOP|STATE_IS_DOCUMENT)) {
+                    cb(status,request);
+                }
+            }
+        }
+JS
+
+    my $response_received; $response_received = sub {
+        my ($status,$request) = @_;
+        if ($self) {
+            if ($status == 0) {
+                $self->{ response } ||= $request;
+            };
+            #$self->repl->remove_callback( $response_received );
+        };
+        delete $self->{response_received}; # remove ourselves
+    };
+    #$self->{response_received} = $response_received; # need to keep it alive
+    my $state_change = $make_state_change->( $response_received );
+
+=for perl
     my $state_change = sub {
         my ($progress,$request,$flags,$status) = @_;
         #warn sprintf "State     : <progress> <request> %08x %08x\n", $flags, $status;
@@ -790,6 +836,7 @@ sub _install_response_header_listener {
     #    warn sprintf "Status     : <progress> <request> %08x %s\n", $status, $msg;
     #    warn sprintf "                                 %08x\n", $STATE_STOP;
     #};
+=cut
 
     my $browser = $self->tab->{linkedBrowser};
 
@@ -823,12 +870,18 @@ sub synchronize {
     
     # 'load' on linkedBrowser is good for successfull load
     # 'error' on tab is good for failed load :-(
-    # Can we add more listeners to one existing lock?
     my $b = $self->tab->{linkedBrowser};
     my $load_lock = $self->_addEventListener([$b,$events],[$self->tab,$events]);
+    #my $load_lock = $self->_addEventListener([$b,$events]);
     $callback->();
     my $ev = $self->_wait_while_busy($load_lock);
-    #warn "$load_lock->{id} caught $load_lock->{event} ($ev->{event})";
+    if (my $h = $self->{on_event}) {
+        if (ref $h eq 'CODE') {
+            $h->($ev)
+        } else {
+            warn "Received $ev->{event}";
+        };
+    };
     
     if ($need_response) {
         #warn "Returning response";
@@ -886,13 +939,13 @@ sub response {
         if ($scheme and $scheme =~ /^https?/) {
             # We can only extract from a HTTP Response
             return $self->_extract_response( $js_res );
-        } elsif ($scheme and $scheme =~ /^(file|data)\b/) {
+        } elsif ($scheme and $scheme =~ /^(file|data|about)\b/) {
             # We're cool!
             return HTTP::Response->new( 200, '', ['Content-Encoding','UTF-8'], encode 'UTF-8' => $self->content);
         } else {
             # make up a response, below
             my $url = $self->document->{documentURI};
-            carp "Making up a response for unknown URL scheme '$scheme' (from '$url')";
+            #carp "Making up a response for unknown URL scheme '$scheme' (from '$url')";
         };
     };
     
@@ -967,7 +1020,19 @@ sub reload {
     });
 }
 
-=head2 C<< $mech->back >>
+# Internal convenience method for dipatching a call either synchronized
+# or not
+sub _sync_call {
+    my ($self, $synchronize, $events, $cb) = @_;
+
+    if ($synchronize) {
+        $self->synchronize( $events, $cb );
+    } else {
+        $cb->();
+    };    
+};
+
+=head2 C<< $mech->back( [$synchronize] >>
 
     $mech->back();
 
@@ -978,13 +1043,15 @@ Returns the (new) response.
 =cut
 
 sub back {
-    my ($self) = @_;
-    $self->synchronize( sub {
+    my ($self, $synchronize) = @_;
+    $synchronize ||= (@_ != 2);
+    
+    $self->_sync_call($synchronize, $self->events, sub {
         $self->tab->{linkedBrowser}->goBack;
     });
 }
 
-=head2 C<< $mech->forward >>
+=head2 C<< $mech->forward( [$synchronize] ) >>
 
     $mech->forward();
 
@@ -995,8 +1062,10 @@ Returns the (new) response.
 =cut
 
 sub forward {
-    my ($self) = @_;
-    $self->synchronize( sub {
+    my ($self, $synchronize) = @_;
+    $synchronize ||= (@_ != 2);
+    
+    $self->_sync_call($synchronize, $self->events, sub {
         $self->tab->{linkedBrowser}->goForward;
     });
 }
@@ -2001,13 +2070,11 @@ sub click {
         @buttons = $self->_option_query(%options);
     };
         
-    if ($options{ synchronize }) {
-        $self->synchronize($self->events, sub { # ,'abort'
+    $self->_sync_call(
+        $options{ synchronize }, $self->events, sub { # ,'abort'
             $buttons[0]->__click();
-        });
-    } else {
-        $buttons[0]->__click();
-    }
+        }
+    );
 
     if (defined wantarray) {
         return $self->response
@@ -2152,7 +2219,6 @@ an array with those forms.
 
 The options
 are identical to those accepted by the L<< /$mech->selector >> method.
-
 
 The returned elements are the DOM C<< <form> >> elements.
 
@@ -2854,7 +2920,7 @@ sub clickables {
     $self->xpath('//*[@onclick]', %options);
 };
 
-=head2 C<< $mech->expand_frames $spec >>
+=head2 C<< $mech->expand_frames( $spec ) >>
 
   my @frames = $mech->expand_frames();
 

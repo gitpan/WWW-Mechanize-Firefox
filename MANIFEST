@@ -54,6 +54,7 @@ t/50-mech-closeTab.t
 t/50-mech-ct.t
 t/50-mech-encoding.t
 t/50-mech-event.t
+t/50-mech-forms.t
 t/50-mech-get.t
 t/50-mech-multi-event.t
 t/50-mech-new-dsl.t
@@ -72,6 +73,7 @@ t/51-mech-form-with-fields.t
 t/51-mech-links-base.html
 t/51-mech-links-nobase.html
 t/51-mech-links.t
+t/51-mech-navigation.t
 t/51-mech-sandbox.html
 t/51-mech-sandbox.t
 t/51-mech-set-content.t
