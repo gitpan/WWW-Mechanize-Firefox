@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.43';
+$VERSION = '0.44';
 
 =head1 NAME
 
@@ -672,6 +672,8 @@ Shorthand method to construct the appropriate
 C<< file:// >> URI and load it into Firefox. Relative
 paths will be interpreted as relative to C<$0>.
 
+This method accepts the same options as C<< ->get() >>.
+
 This method is special to WWW::Mechanize::Firefox but could
 also exist in WWW::Mechanize through a plugin.
 
@@ -1037,7 +1039,7 @@ sub _sync_call {
     };    
 };
 
-=head2 C<< $mech->back( [$synchronize] >>
+=head2 C<< $mech->back( [$synchronize] ) >>
 
     $mech->back();
 
@@ -1111,7 +1113,7 @@ sub document {
 
     my $ds = $mech->docshell;
 
-Returns the C<docShell> Javascript object.
+Returns the C<docShell> Javascript object associated with the tab.
 
 This is WWW::Mechanize::Firefox specific.
 
@@ -2054,12 +2056,12 @@ sub click {
         $name = quotemeta($options{ name }|| '');
         $options{ xpath } = [
                        sprintf( q{//button[@name="%s"]}, $name),
-                       sprintf( q{//input[(@type="button" or @type="submit") and @name="%s"]}, $name), 
+                       sprintf( q{//input[(@type="button" or @type="submit" or @type="image") and @name="%s"]}, $name), 
         ];
         if ($options{ name } eq '') {
             push @{ $options{ xpath }}, 
                        q{//button},
-                       q{//input[(@type="button" or @type="submit")]},
+                       q{//input[(@type="button" or @type="submit" or @type="image")]},
             ;
         };
         $options{ user_info } = "Button with name '$name'";

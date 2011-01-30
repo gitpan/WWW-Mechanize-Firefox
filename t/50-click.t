@@ -14,7 +14,7 @@ if (! $mech) {
     plan skip_all => "Couldn't connect to MozRepl: $@";
     exit
 } else {
-    plan tests => 16;
+    plan tests => 17;
 };
 
 isa_ok $mech, 'WWW::Mechanize::Firefox';
@@ -74,6 +74,11 @@ like $mech->uri, qr/\bGo=/, "->click() the 'Go' button works via options";
 $mech->get_local('50-click.html');
 $mech->click('Go'); # click the "Go" button
 like $mech->uri, qr/\bGo=/, "->click() the 'Go' button works";
+
+# Name
+$mech->get_local('50-click.html');
+$mech->click('imageGo'); # click the "imageGo" button
+like $mech->uri, qr/\bimageGo\.x=/, "->click() the 'imageGo' button works";
 
 # Name via options
 $mech->get_local('50-click.html');
