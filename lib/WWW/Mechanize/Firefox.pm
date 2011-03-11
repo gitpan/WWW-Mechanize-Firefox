@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.46';
+$VERSION = '0.47';
 
 =head1 NAME
 
@@ -659,10 +659,10 @@ sub get {
     };
 
     if (my $target = delete $options{":content_file"}) {
-        $self->save_url($url => $target, %options);
+        $self->save_url($url => ''.$target, %options);
     } else {
         $self->synchronize($self->events, sub {
-            $b->loadURIWithFlags($url,$flags);
+            $b->loadURIWithFlags(''.$url,$flags);
         });
     };
 };
@@ -1190,10 +1190,11 @@ implemented as a convenience method for L<HTML::Display::MozRepl>.
 
 sub update_html {
     my ($self,$content) = @_;
-    my $data = encode_base64($content,'');
-    my $url = qq{data:text/html;base64,$data};
+    my $url = URI->new('data:');
+    $url->media_type("text/html");
+    $url->data($content);
     $self->synchronize($self->events, sub {
-        $self->tab->{linkedBrowser}->loadURI($url);
+        $self->tab->{linkedBrowser}->loadURI("$url");
     });
     return
 };
@@ -1271,7 +1272,9 @@ function (document,filetarget,rscdir,progress) {
     // with persist flags if desired
     const nsIWBP = Components.interfaces.nsIWebBrowserPersist;
     const flags = nsIWBP.PERSIST_FLAGS_REPLACE_EXISTING_FILES;
-    obj_Persist.persistFlags = flags | nsIWBP.PERSIST_FLAGS_FROM_CACHE;
+    obj_Persist.persistFlags = flags | nsIWBP.PERSIST_FLAGS_FROM_CACHE
+                                     | nsIWBP["PERSIST_FLAGS_FORCE_ALLOW_COOKIES"]
+                                     ;
     
     obj_Persist.progressListener = progress;
 
@@ -1344,8 +1347,13 @@ function (source,filetarget,progress) {
     // with persist flags if desired
     const nsIWBP = Components.interfaces.nsIWebBrowserPersist;
     const flags = nsIWBP.PERSIST_FLAGS_REPLACE_EXISTING_FILES;
-    obj_Persist.persistFlags = flags | nsIWBP.PERSIST_FLAGS_FROM_CACHE;
+    // Also make it send the proper cookies
+    // If we are on a 3.0 Firefox, PERSIST_FLAGS_FORCE_ALLOW_COOKIES does
+    // not exist, so we need to get creative:
     
+    obj_Persist.persistFlags = flags | nsIWBP.PERSIST_FLAGS_FROM_CACHE
+                                     | nsIWBP["PERSIST_FLAGS_FORCE_ALLOW_COOKIES"]
+                                     ;
     obj_Persist.progressListener = progress;
 
     //save file to target
