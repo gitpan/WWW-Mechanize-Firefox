@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.47';
+$VERSION = '0.48';
 
 =head1 NAME
 
@@ -885,7 +885,7 @@ sub synchronize {
         if (ref $h eq 'CODE') {
             $h->($ev)
         } else {
-            warn "Received $ev->{event}";
+            #warn "Received $ev->{event}";
         };
     };
     
@@ -1947,6 +1947,7 @@ sub xpath {
             #warn ">Searching @$query in $doc->{title}";
             # Munge the multiple @$queries into one:
             my $q = join "|", @$query;
+#            warn $q;
             my @found = map { $doc->__xpath($_, $n) } $q; # @$query;
             #warn "Found $_->{tagName}" for @found;
             push @res, @found;
@@ -2106,13 +2107,11 @@ sub click {
     if (exists $options{ name }) {
         $name = quotemeta($options{ name }|| '');
         $options{ xpath } = [
-                       sprintf( q{//button[@name="%s"]}, $name),
-                       sprintf( q{//input[(@type="button" or @type="submit" or @type="image") and @name="%s"]}, $name), 
+                       sprintf( q{//*[(translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="button" and @name="%s") or (translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="input" and (@type="button" or @type="submit" or @type="image") and @name="%s")]}, $name, $name), 
         ];
         if ($options{ name } eq '') {
             push @{ $options{ xpath }}, 
-                       q{//button},
-                       q{//input[(@type="button" or @type="submit" or @type="image")]},
+                       q{//*[(translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz") = "button" or translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="input") and @type="button" or @type="submit" or @type="image"]},
             ;
         };
         $options{ user_info } = "Button with name '$name'";
@@ -2137,6 +2136,83 @@ sub click {
     if (defined wantarray) {
         return $self->response
     };
+}
+
+=head2 C<< $mech->click_button( ... ) >>
+
+  $mech->click_button( name => 'go' );
+  $mech->click_button( input => $mybutton );
+
+Has the effect of clicking a button on the current form by specifying its
+name, value, or index. Its arguments are a list of key/value pairs. Only
+one of name, number, input or value must be specified in the keys.
+
+=over 4
+
+=item *
+
+C<name> - name of the button
+
+=item *
+
+C<value> - value of the button
+
+=item *
+
+C<input> - DOM node
+
+=item *
+
+C<id> - id of the button
+
+=item *
+
+C<number> - number of the button
+
+=back
+
+If you find yourself wanting to specify a button through its
+C<selector> or C<xpath>, consider using C<< ->click >> instead.
+
+=cut
+
+sub click_button {
+    my ($self,%options) = @_;
+    my $node;
+    my $xpath;
+    my $user_message;
+    if (exists $options{ input }) {
+        $node = delete $options{ input };
+    } elsif (exists $options{ name }) {
+        my $v = delete $options{ name };
+        $xpath = sprintf( '//*[(translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz") = "button" and @name="%s") or (translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="input" and @type="button" or @type="submit" and @name="%s")]', $v, $v);
+        $user_message = "Button name '$v' unknown";
+    } elsif (exists $options{ value }) {
+        my $v = delete $options{ value };
+        $xpath = sprintf( '//*[(translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz") = "button" and @value="%s") or (translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="input" and (@type="button" or @type="submit") and @value="%s")]', $v, $v);
+        $user_message = "Button value '$v' unknown";
+    } elsif (exists $options{ id }) {
+        my $v = delete $options{ id };
+        $xpath = sprintf '//*[@id="%s"]', $v;
+        $user_message = "Button name '$v' unknown";
+    } elsif (exists $options{ number }) {
+        my $v = delete $options{ number };
+        $xpath = sprintf '//*[translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz") = "button" or (local-name() = "input" and @type="submit")][%s]', $v;
+        $user_message = "Button number '$v' out of range";
+    };
+    #warn $xpath;
+    $node ||= $self->xpath( $xpath,
+                          node => $self->current_form,
+                          single => 1,
+                          user_message => $user_message,
+              );
+    if ($node) {
+        $self->click({ dom => $node, %options });
+    } else {
+        
+        $self->signal_condition("");
+    };
+    
 }
 
 =head1 FORM METHODS
@@ -2391,8 +2467,15 @@ sub _field_by_name {
     } else {
         _default_limiter( single => \%options );
         my $query = 
-            sprintf( q{.//input[@%s="%s"] | .//select[@%s="%s"] | .//textarea[@%s="%s"]}, 
-                               $attr,$name,          $attr,$name,          $attr,$name );
+            './/*[(' . 
+                join ' or ',
+                q{translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="input"},
+                q{translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="select"},
+                q{translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz")="textarea"},
+            . ')'
+            . sprintf(  q{ and @%s="%s"]}, 
+                             $attr,  $name
+                   );
         @fields = $self->xpath($query,%options);
     };
     @fields
