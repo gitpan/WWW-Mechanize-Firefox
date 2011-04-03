@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.48';
+$VERSION = '0.49';
 
 =head1 NAME
 
@@ -1605,7 +1605,6 @@ sub _default_limiter {
 
 sub quote_xpath($) {
     local $_ = $_[0];
-    #s/(['"\[\]])/\\$1/g;
     s/(['"\[\]])/$xpath_quote{$1} || $1/ge;
     $_
 };
@@ -1655,10 +1654,13 @@ sub find_link_dom {
         );
         my $lhs = $lefthand{ $lvalue } || '@'.$lvalue;
         for my $op (keys %match_op) {
-            my $key = "${lvalue}_$op";
+            my $v = $match_op{ $op };
+            $op = '_'.$op if length($op);
+            my $key = "${lvalue}$op";
+
             if (exists $opts{ $key }) {
                 my $p = delete $opts{ $key };
-                push @spec, sprintf $match_op{ $op }, $lhs, $p;
+                push @spec, sprintf $v, $lhs, $p;
             };
         };
     };
