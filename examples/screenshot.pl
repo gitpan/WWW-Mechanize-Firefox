@@ -7,6 +7,8 @@ use Pod::Usage;
 GetOptions(
     'mozrepl|m:s' => \my $mozrepl,
     'outfile|o:s' => \my $outfile,
+    'tab|t:s' => \my $tab,
+    'current|c' => \my $current,
 ) or pod2usage();
 $outfile ||= 'screenshot.png';
 
@@ -15,8 +17,17 @@ if (! @ARGV) {
     push @args, tab => 'current';
 };
 
+if ($tab) {
+    $tab = qr/$tab/;
+} elsif ($current) {
+    $tab = $current
+};
+
 my $mech = WWW::Mechanize::Firefox->new(
     launch => 'firefox',
+    create => 1,
+    tab => $tab,
+    autoclose => (!$tab),
     @args
 );
 

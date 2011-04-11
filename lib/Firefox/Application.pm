@@ -2,11 +2,11 @@ package Firefox::Application;
 use strict;
 
 use MozRepl::RemoteObject;
-use MIME::Base64;
+use URI;
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.49';
+$VERSION = '0.50';
 
 =head1 NAME
 
@@ -420,11 +420,13 @@ WWW::Mechanize::Firefox is associated with.
 
 sub set_tab_content {
     my ($self, $tab, $content, $repl) = @_;
+    my $url = URI->new('data:');
+    $url->media_type("text/html");
+    $url->data($content);
+    
     $tab ||= $self->tab;
     $repl ||= $self->repl;
-    my $data = encode_base64($content,'');
-    my $url = qq{data:text/html;base64,$data};
-    $tab->{linkedBrowser}->loadURI($url);
+    $tab->{linkedBrowser}->loadURI("".$url);
 };
 
 =head1 TODO

@@ -2,6 +2,7 @@
 Changes
 examples/bcat.pl
 examples/dump-links.pl
+examples/ff-scrape.pl
 examples/fullscreen.pl
 examples/gen_examples_pod.pl
 examples/javascript.pl
@@ -126,6 +127,8 @@ t/99-pod.t
 t/99-todo.t
 t/99-unix-text.t
 t/99-versions.t
+t/mechanize/autocheck.t
+t/mechanize/content.t
 t/mixi_jp_index.html
 t/rt65615.html
 t/rt65615.t

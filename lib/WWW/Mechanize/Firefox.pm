@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.49';
+$VERSION = '0.50';
 
 =head1 NAME
 
@@ -94,6 +94,17 @@ To whitelist frames to be searched, pass the list
 of frame selectors:
 
           frames => ['#content_frame']
+
+=item * 
+
+C<autodie> - whether web failures converted are fatal Perl errors. See
+the C<autodie> accessor. True by default to make error checking easier.
+
+To make errors non-fatal, pass
+
+    autodie => 0
+
+in the constructor.
 
 =item * 
 
@@ -179,6 +190,7 @@ sub new {
     if (delete $args{ autoclose }) {
         $args{ app }->autoclose_tab($args{ tab });
     };
+    if (! exists $args{ autodie }) { $args{ autodie } = 1 };
     
     $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded error abort stop]];
     $args{ on_event } ||= undef;
@@ -869,10 +881,7 @@ sub synchronize {
     undef $self->{response};
     
     my $need_response = defined wantarray;
-    my $response_catcher;
-    #if ($need_response) {
-        $response_catcher = $self->_install_response_header_listener();
-    #};
+    my $response_catcher = $self->_install_response_header_listener();
     
     # 'load' on linkedBrowser is good for successfull load
     # 'error' on tab is good for failed load :-(
@@ -889,6 +898,7 @@ sub synchronize {
         };
     };
     
+    $self->signal_http_status; # will also fetch ->response if autodie is on :(
     if ($need_response) {
         #warn "Returning response";
         return $self->response
@@ -1141,7 +1151,7 @@ It also currently only works for HTML pages.
 =cut
 
 sub content {
-    my ($self) = @_;
+    my ($self, %options) = @_;
     my $d = $self->document; # keep a reference to it!
     
     my $html = $self->repl->declare(<<'JS', 'list');
@@ -1161,8 +1171,34 @@ JS
         # But it does happen.
         $content = Encode::decode($encoding, $content);
     };
+    
+    if ( my $format = delete $options{format} ) {
+        if ( $format eq 'text' ) {
+            $content = $self->text;
+        }
+        else {
+            $self->die( qq{Unknown "format" parameter "$format"} );
+        }
+    }
+
     return $content
 };
+
+=head2 $mech->text()
+
+Returns the text of the current HTML content.  If the content isn't
+HTML, $mech will die.
+
+=cut
+
+sub text {
+    my $self = shift;
+    
+    # Waugh - this is highly inefficient but conveniently short to write
+    # Maybe this should skip SCRIPT nodes...
+    join '', map { $_->{nodeValue} } $self->xpath('//*/text()');
+}
+
 
 =head2 C<< $mech->content_encoding >>
 
@@ -1500,13 +1536,26 @@ sub links {
     } @links;
 };
 
-# Call croak or cluck, depending on the C< autodie > setting
+# Call croak or carp, depending on the C< autodie > setting
 sub signal_condition {
     my ($self,$msg) = @_;
     if ($self->{autodie}) {
         croak $msg
     } else {
         carp $msg
+    }
+};
+
+# Call croak on the C< autodie > setting if we have a non-200 status
+sub signal_http_status {
+    my ($self) = @_;
+    if ($self->{autodie}) {
+        if ($self->status !~ /^2/) {
+            # there was an error
+            croak ($self->response->message || sprintf "Got status code %d", $self->status );
+        };
+    } else {
+        # silent
     }
 };
 
@@ -2724,7 +2773,9 @@ sub submit {
     my ($self,$dom_form) = @_;
     $dom_form ||= $self->current_form;
     if ($dom_form) {
-        $dom_form->submit();
+        $dom_form->submit(); # why don't we ->synchronize here??
+        $self->signal_http_status;
+
         $self->clear_current_form;
         1;
     } else {
