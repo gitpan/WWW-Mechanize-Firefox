@@ -6,7 +6,7 @@ use URI;
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.50';
+$VERSION = '0.51';
 
 =head1 NAME
 
@@ -69,6 +69,7 @@ sub new {
     my ($class, %args) = @_;
     my $loglevel = delete $args{ log } || [qw[ error ]];
     my $use_queue = exists $args{ use_queue } ? delete $args{ use_queue } : 1;
+    my $api = delete $args{ api };
     if (! ref $args{ repl }) {
         my $exe = delete $args{ launch };
         $args{ repl } = MozRepl::RemoteObject->install_bridge(
@@ -76,14 +77,26 @@ sub new {
             launch => $exe,
             log => $loglevel,
             use_queue => $use_queue,
+            bufsize => delete $args{ bufsize },
         );
     };
     
-    if (my $bufsize = delete $args{ bufsize }) {
-        $args{ repl }->repl->client->telnet->max_buffer_length($bufsize);
+    # Now install the proper API
+    if (! $api) {
+        my $info = $args{ repl }->appinfo;
+        my $v = $info->{version};
+        $v =~ s!^(\d+.\d+).*!$1!
+            or $v = '3.0'; # Wild guess
+         
+        if ($v >= 4) {
+            $api = 'Firefox::Application::API40';
+        } else {
+            $api = 'Firefox::Application::API35';
+        };
     };
-        
-    bless \%args, $class;
+    MozRepl::RemoteObject::require_module( $api );
+    
+    bless \%args, $api;
 };
 
 sub DESTROY {
@@ -143,10 +156,6 @@ These functions will need fixing for Firefox 4.
 
 =cut
 
-sub addons {
-    my $self = shift;
-    $self->updateitems(type => 'ADDON', @_);
-};
 
 =head2 C<< $ff->locales( %args ) >>
 
@@ -158,13 +167,6 @@ sub addons {
 
 Returns the list of installed locales as C<nsIUpdateItem>s.
 
-=cut
-
-sub locales {
-    my $self = shift;
-    $self->updateitems(type => 'LOCALE', @_);
-};
-
 =head2 C<< $ff->themes( %args ) >>
 
   for my $theme ($ff->themes) {
@@ -174,13 +176,6 @@ sub locales {
   };
 
 Returns the list of installed locales as C<nsIUpdateItem>s.
-
-=cut
-
-sub themes {
-    my $self = shift;
-    $self->updateitems(type => 'THEME', @_);
-};
 
 =head2 C<< $ff->updateitems( %args ) >>
 
@@ -206,24 +201,6 @@ C<LOCALE> - fetch locales
 C<THEME> - fetch themes
 
 =back
-
-=cut
-sub updateitems {
-    my ($self, %options) = @_;
-    my $repl = delete $options{ repl } || $self->repl;
-    my $type = $options{type} || 'ANY';
-    my $addons_js = $repl->declare(sprintf( <<'JS', $type), 'list');
-    function () {
-        var em = Components.classes["@mozilla.org/extensions/manager;1"]
-                    .getService(Components.interfaces.nsIExtensionManager);
-        var type = Components.interfaces.nsIUpdateItem.TYPE_%s;
-        var count = {};
-        var list = em.getItemList(type, count);
-        return list
-   };
-JS
-    $addons_js->()
-};
 
 =head1 UI METHODS
 
@@ -254,33 +231,14 @@ to close the tab.
 
 =cut
 
-sub addTab {
-    my ($self, %options) = @_;
-    my $repl = $options{ repl } || $self->repl;
-    my $rn = $repl->name;
-
-    my $tab = $self->browser( $repl )->addTab;
-
-    if (not exists $options{ autoclose } or $options{ autoclose }) {
-        $self->autoclose_tab($tab)
-    };
-    
-    $tab
-};
-
-=head2 C<< $ff->addTab( %options ) >>
+=head2 C<< $ff->selectedTab( %options ) >>
 
     my $curr = $ff->selectedTab();
 
-Returns the currently active tab.
+Sets the currently active tab.
 
 =cut
 
-sub selectedTab {
-    my ($self,$repl) = @_;
-    $repl ||= $self->repl;
-    return $self->browser( $repl )->{tabContainer}->{selectedItem};
-}
 
 =head2 C<< $ff->closeTab( $tab [,$repl] ) >>
 
@@ -289,22 +247,6 @@ sub selectedTab {
 Close the given tab.
 
 =cut
-
-sub closeTab {
-    my ($self,$tab,$repl) = @_;
-    $repl ||= $self->repl;
-    my $close_tab = $repl->declare(<<'JS');
-function(tab) {
-    // find containing browser
-    var p = tab.parentNode;
-    while (p.tagName != "tabbrowser") {
-        p = p.parentNode;
-    };
-    if(p){p.removeTab(tab)};
-}
-JS
-    return $close_tab->($tab);
-}
 
 =head2 C<< $ff->openTabs( [$repl] ) >>
 
@@ -316,40 +258,6 @@ Returns a list of information about the currently open tabs.
 
 =cut
 
-sub openTabs {
-    my ($self,$repl) = @_;
-    $repl ||= $self->repl;
-    my $open_tabs = $repl->declare(<<'JS', 'list');
-function() {
-    var idx = 0;
-    var tabs = [];
-    
-    var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
-                       .getService(Components.interfaces.nsIWindowMediator);
-    var win = wm.getMostRecentWindow('navigator:browser');
-    if (win) {
-        var browser = win.getBrowser();
-        Array.prototype.forEach.call(
-            browser.tabContainer.childNodes, 
-            function(tab) {
-                var d = tab.linkedBrowser.contentWindow.document;
-                tabs.push({
-                    location: d.location.href,
-                    document: d,
-                    title:    d.title,
-                    "id":     d.id,
-                    index:    idx++,
-                    panel:    tab.linkedPanel,
-                    tab:      tab,
-                });
-            });
-    };
-
-    return tabs;
-}
-JS
-    $open_tabs->();
-}
 
 =head2 C<< $ff->activateTab( [ $tab [, $repl ]] ) >>
 
@@ -391,21 +299,10 @@ sub browser {
           // No browser windows are open, so open a new one.
           win = window.open('about:blank');
         };
-        return win.getBrowser()
+        return win.gBrowser
+        // return win.getBrowser()
     }
 JS
-};
-
-sub autoclose_tab {
-    my ($self,$tab) = @_;
-    my $release = join "",
-        q<var p=self.parentNode;>,
-        q<while(p && p.tagName != "tabbrowser") {>,
-            q<p = p.parentNode>,
-        q<};>,
-        q<if(p){p.removeTab(self)};>,
-    ;
-    $tab->__release_action($release);
 };
 
 =head2 C<< $ff->set_tab_content( $tab, $html [,$repl] ) >>
@@ -415,6 +312,9 @@ sub autoclose_tab {
 This is a more general method that allows you to replace
 the HTML of an arbitrary tab, and not only the tab that
 WWW::Mechanize::Firefox is associated with.
+
+It has the flaw of not waiting until the tab has
+loaded.
 
 =cut
 
@@ -426,6 +326,7 @@ sub set_tab_content {
     
     $tab ||= $self->tab;
     $repl ||= $self->repl;
+    
     $tab->{linkedBrowser}->loadURI("".$url);
 };
 

@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.50';
+$VERSION = '0.51';
 
 =head1 NAME
 
@@ -119,6 +119,15 @@ C<bufsize> - L<Net::Telnet> buffer size, if the default of 1MB is not enough
 C<events> - the set of default Javascript events to listen for while
 waiting for a reply
 
+The default set is
+
+  DOMFrameContentLoaded
+  DOMContentLoaded
+  pageshow
+  error
+  abort
+  stop
+
 =item * 
 
 C<app> - a premade L<Firefox::Application>
@@ -192,7 +201,7 @@ sub new {
     };
     if (! exists $args{ autodie }) { $args{ autodie } = 1 };
     
-    $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded error abort stop]];
+    $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded pageshow error abort stop]];
     $args{ on_event } ||= undef;
     $args{ pre_value } ||= ['focus'];
     $args{ post_value } ||= ['change','blur'];
@@ -656,6 +665,18 @@ C<< :content_file >> - filename to store the data in
 
 C<< no_cache >> - if true, bypass the browser cache
 
+=item *
+
+C<< synchronize >> - wait until all elements have loaded
+
+The default is to wait until all elements have loaded. You can switch
+this off by passing
+
+    synchronize => 0
+
+for example if you want to manually poll for an element that appears fairly
+early during the load of a complex page.
+
 =back
 
 =cut
@@ -669,14 +690,17 @@ sub get {
     if ($options{ no_cache }) {
         $flags = $self->repl->constant('nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE');
     };
-
-    if (my $target = delete $options{":content_file"}) {
-        $self->save_url($url => ''.$target, %options);
-    } else {
-        $self->synchronize($self->events, sub {
-            $b->loadURIWithFlags(''.$url,$flags);
-        });
+    if (! exists $options{ synchronize }) {
+        $options{ synchronize } = 1;
     };
+    
+    $self->_sync_call( $options{ synchronize }, $self->{events}, sub {
+        if (my $target = delete $options{":content_file"}) {
+            $self->save_url($url => ''.$target, %options);
+        } else {
+            $b->loadURIWithFlags(''.$url,$flags);
+        };
+    });
 };
 
 =head2 C<< $mech->get_local( $filename , %options ) >>
@@ -822,6 +846,7 @@ sub _install_response_header_listener {
             const STATE_IS_DOCUMENT = Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT;
             const STATE_IS_WINDOW = Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW;
             
+            //return cb
             return function (progress,request,flags,status) {
                 if (flags & (STATE_STOP|STATE_IS_DOCUMENT) == (STATE_STOP|STATE_IS_DOCUMENT)) {
                     cb(progress,request,flags,status);
@@ -887,14 +912,14 @@ sub synchronize {
     # 'error' on tab is good for failed load :-(
     my $b = $self->tab->{linkedBrowser};
     my $load_lock = $self->_addEventListener([$b,$events],[$self->tab,$events]);
-    #my $load_lock = $self->_addEventListener([$b,$events]);
     $callback->();
     my $ev = $self->_wait_while_busy($load_lock);
     if (my $h = $self->{on_event}) {
         if (ref $h eq 'CODE') {
             $h->($ev)
         } else {
-            #warn "Received $ev->{event}";
+            warn "Received $ev->{event}";
+            #warn "$ev->{event}->{text}"";
         };
     };
     
@@ -2261,7 +2286,7 @@ sub click_button {
         $self->click({ dom => $node, %options });
     } else {
         
-        $self->signal_condition("");
+        $self->signal_condition($user_message);
     };
     
 }
@@ -2983,19 +3008,23 @@ sub is_visible {
     # No element means not visible
     return
         unless $options{ dom };
+    $options{ window } ||= $self->tab->{linkedBrowser}->{contentWindow};
+    
     
     my $_is_visible = $self->repl->declare(<<'JS');
-    function (obj)
+    function (obj,window)
     {
         while (obj) {
             // No object
             if (!obj) return false;
             // Descends from document, so we're done
-            if (obj.parentNode === obj.ownerDocument)
+            if (obj.parentNode === obj.ownerDocument) {
                 return true;
+            };
             // Not in the DOM
-            if (!obj.parentNode)
+            if (!obj.parentNode) {
                 return false;
+            };
             // Direct style check
             if (obj.style) {
                 if (obj.style.display == 'none') return false;
@@ -3003,11 +3032,12 @@ sub is_visible {
             };
             
             if (window.getComputedStyle) {
-                var style = window.getComputedStyle(obj, "");
-                if (style.display == 'none')
+                var style = window.getComputedStyle(obj, null);
+                if (style.display == 'none') {
+                    return false; }
+                if (style.visibility == 'hidden') {
                     return false;
-                if (style.visibility == 'hidden')
-                    return false;
+                };
             }
             obj = obj.parentNode;
         };
@@ -3015,7 +3045,7 @@ sub is_visible {
         return false
     }
 JS
-    !!$_is_visible->($options{dom});
+    !!$_is_visible->($options{dom}, $options{window});
 };
 
 =head2 C<< $mech->wait_until_invisible( $element ) >>
@@ -3475,6 +3505,11 @@ for more tab info
 
 L<https://developer.mozilla.org/en/Document_Loading_-_From_Load_Start_to_Finding_a_Handler>
 for information on how to possibly override the "Save As" dialog
+
+=item *
+
+L<http://code.google.com/p/selenium/source/browse/trunk/javascript/firefox-driver/extension/components/promptService.js>
+for information on how to override a lot of other prompts (like proxy etc.)
 
 =back
 
