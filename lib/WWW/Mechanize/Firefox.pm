@@ -3,7 +3,6 @@ use 5.006; #weaken
 use strict;
 use Time::HiRes; # hires sleep()
 
-use MozRepl::RemoteObject;
 use URI;
 use Cwd;
 use File::Basename qw(dirname);
@@ -19,7 +18,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.51';
+$VERSION = '0.52';
 
 =head1 NAME
 
@@ -846,7 +845,7 @@ sub _install_response_header_listener {
             const STATE_IS_DOCUMENT = Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT;
             const STATE_IS_WINDOW = Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW;
             
-            //return cb
+            return cb
             return function (progress,request,flags,status) {
                 if (flags & (STATE_STOP|STATE_IS_DOCUMENT) == (STATE_STOP|STATE_IS_DOCUMENT)) {
                     cb(progress,request,flags,status);

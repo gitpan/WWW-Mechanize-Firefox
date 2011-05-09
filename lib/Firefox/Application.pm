@@ -6,7 +6,7 @@ use URI;
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.51';
+$VERSION = '0.52';
 
 =head1 NAME
 
@@ -60,6 +60,13 @@ suitable for initializing one.
 =item * 
 
 C<use_queue> - whether to enable L<MozRepl::RemoteObject> command queueing
+
+=item *
+
+C<api> - class for the API wrapper
+
+You almost never want to use this parameter, as Firefox::Application
+asks Firefox about its version.
 
 =back
 
@@ -149,13 +156,11 @@ sub appinfo {
       print sprintf "GUID: %s\n", $addon->{id};
   };
 
-Returns the list of installed addons as C<nsIUpdateItem>s.
-See L<https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsIUpdateItem>.
-
-These functions will need fixing for Firefox 4.
-
-=cut
-
+Returns the list of installed addons as C<nsIUpdateItem>s (FF 3.5+)
+or C<Addon>s (FF4+).
+See L<https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsIUpdateItem>
+or L<https://developer.mozilla.org/en/Addons/Add-on_Manager/Addon>,
+depending on your Firefox version.
 
 =head2 C<< $ff->locales( %args ) >>
 

@@ -3,7 +3,21 @@ use strict;
 use parent 'Firefox::Application';
 use vars qw($VERSION %addon_types);
 use MozRepl::RemoteObject qw(as_list);
-$VERSION = '0.51';
+$VERSION = '0.52';
+
+=head1 NAME
+
+Firefox::Application::API35 - API wrapper for Firefox 3.5+
+
+=head1 SYNOPSIS
+
+    use Firefox::Application;
+    my $ff = Firefox::Application->new(
+        # Force the Firefox 4 API
+        api => 'Firefox::Application::API40',
+    );
+
+=head1 METHODS
 
 =head2 C<< $api->updateitems( %args ) >>
 
@@ -212,5 +226,18 @@ JS
     $open_tabs->();
 }
 
-
 1;
+
+=head1 AUTHOR
+
+Max Maischein C<corion@cpan.org>
+
+=head1 COPYRIGHT (c)
+
+Copyright 2009-2011 by Max Maischein C<corion@cpan.org>.
+
+=head1 LICENSE
+
+This module is released under the same terms as Perl itself.
+
+=cut

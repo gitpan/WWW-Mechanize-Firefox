@@ -2,7 +2,21 @@ package Firefox::Application::API35;
 use strict;
 use parent 'Firefox::Application';
 use vars qw($VERSION);
-$VERSION = '0.51';
+$VERSION = '0.52';
+
+=head1 NAME
+
+Firefox::Application::API35 - API wrapper for Firefox 3.5+
+
+=head1 SYNOPSIS
+
+    use Firefox::Application;
+    my $ff = Firefox::Application->new(
+        # Force the Firefox 3.5 API
+        api => 'Firefox::Application::API35',
+    );
+
+=head1 METHODS
 
 =head2 C<< $api->updateitems( %args ) >>
 
@@ -156,3 +170,17 @@ JS
 }
 
 1;
+
+=head1 AUTHOR
+
+Max Maischein C<corion@cpan.org>
+
+=head1 COPYRIGHT (c)
+
+Copyright 2009-2011 by Max Maischein C<corion@cpan.org>.
+
+=head1 LICENSE
+
+This module is released under the same terms as Perl itself.
+
+=cut
