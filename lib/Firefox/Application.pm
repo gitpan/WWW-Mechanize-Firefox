@@ -6,7 +6,7 @@ use URI;
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.52';
+$VERSION = '0.53';
 
 =head1 NAME
 
@@ -97,6 +97,8 @@ sub new {
          
         if ($v >= 4) {
             $api = 'Firefox::Application::API40';
+        } elsif ($v >= 3.6) {
+            $api = 'Firefox::Application::API36';
         } else {
             $api = 'Firefox::Application::API35';
         };
@@ -206,6 +208,78 @@ C<LOCALE> - fetch locales
 C<THEME> - fetch themes
 
 =back
+
+=cut
+
+sub profileService {
+    my ($self) = @_;
+    
+    my $profileService = $self->repl->declare(<<'JS')->();
+        function () {
+            return Components.classes["@mozilla.org/toolkit/profile-service;1"]
+                   .createInstance(Components.interfaces.nsIToolkitProfileService);
+        }
+JS
+}
+
+=head2 C<< $ff->current_profile >>
+
+    print $ff->current_profile->{name}, "\n";
+
+Returns currently selected profile as C<nsIToolkitProfile>.
+
+See L<https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsIToolkitProfile>.
+
+=cut
+
+sub current_profile {
+    my ($self) = @_;
+    $self->profileService->{selectedProfile}
+}
+
+=head2 C<< $ff->find_profile( $name ) >>
+
+    print $ff->find_profile("")->{localDir}, "\n";
+
+Returns the profile given its name. Dies
+if the profile cannot be found.
+
+=cut
+
+sub find_profile {
+    my ($self,$name) = @_;
+    $self->profileService->getProfileByName($name);
+}
+
+=head2 C<< $ff->profiles >>
+
+    for ($ff->profiles) {
+        print "Profile: ", $_->{name}, "\n";
+    }
+
+Lists the installed profiles as C<nsIToolkitProfile>s.
+
+See L<https://developer.mozilla.org/en/XPCOM_Interface_Reference/nsIToolkitProfile>.
+
+=cut
+
+sub profiles {
+    my ($self) = @_;
+    
+    my $getProfiles = $self->repl->declare(<<'JS', 'list');
+        function () {
+            var toolkitProfileService = Components.classes["@mozilla.org/toolkit/profile-service;1"]
+                            .createInstance(Components.interfaces.nsIToolkitProfileService);
+            var res = new Array;
+            var i = toolkitProfileService.profiles;
+            while( i.hasMoreElements() ) {
+                res.push( i.getNext() );
+            };
+            return res
+        }
+JS
+    $getProfiles->()
+}
 
 =head1 UI METHODS
 

@@ -10,7 +10,7 @@ use URI::URL qw();
 use Carp qw(carp croak);
 
 use vars qw($VERSION);
-$VERSION = '0.53';
+$VERSION = '0.54';
 
 =head1 SYNOPSIS
 
@@ -98,7 +98,7 @@ sub spawn {
   push @opts, "-e" => qq{"} . delete($args{ eval }) . qq{"}
       if $args{ eval };
 
-  open my $server, qq'$^X "$server_file" "$web_page" "$logfile" @opts|'
+  my $pid = open my $server, qq'$^X "$server_file" "$web_page" "$logfile" @opts|'
     or croak "Couldn't spawn local server $server_file : $!";
   my $url = <$server>;
   chomp $url;
@@ -106,6 +106,7 @@ sub spawn {
       unless $url;
 
   $self->{_fh} = $server;
+  $self->{_pid} = $pid;
   $self->{_server_url} = URI::URL->new($url);
 
   $self;
@@ -148,6 +149,19 @@ sub stop {
   undef $_[0]->{_server_url}
 };
 
+=head2 C<< $server->kill >>
+
+This kills the server process via C<kill>. The log
+cannot be retrieved then.
+
+=cut
+
+sub kill {
+  CORE::kill( 9 => $_[0]->{ _pid } );
+  undef $_[0]->{_server_url};
+  undef $_[0]->{_pid};
+};
+
 =head2 C<< $server->get_log >>
 
 This returns the
@@ -181,6 +195,14 @@ You need to be wary about issuing requests with escaped URL parameters.
 
 This URL will response with status code 404.
 
+=head2 Timeout C<< $server->error_timeout($seconds) >>
+
+This URL will send a 599 error after C<$seconds> seconds.
+
+=head2 Timeout+close C<< $server->error_close($seconds) >>
+
+This URL will send nothing and close the connection after C<$seconds> seconds.
+
 =head2 Error in response content C<< $server->error_after_headers >>
 
 This URL will send headers for a successfull response but will close the
@@ -201,6 +223,8 @@ use vars qw(%urls);
 %urls = (
     'redirect' => 'redirect/%s',
     'error_notfound' => 'error/notfound/%s',
+    'error_timeout' => 'error/timeout/%s',
+    'error_close' => 'error/close/%s',
     'error_after_headers' => 'error/after_headers',
     'chunked' => 'chunks',
 );
