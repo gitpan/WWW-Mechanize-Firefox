@@ -6,7 +6,7 @@ use URI;
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.53';
+$VERSION = '0.54';
 
 =head1 NAME
 
@@ -78,13 +78,14 @@ sub new {
     my $use_queue = exists $args{ use_queue } ? delete $args{ use_queue } : 1;
     my $api = delete $args{ api };
     if (! ref $args{ repl }) {
-        my $exe = delete $args{ launch };
+        my @passthrough = qw(repl js_JSON launch);
+        my %options = map { exists $args{ $_ } ? ($_ => delete $args{ $_ }) : () } 
+                      @passthrough;
         $args{ repl } = MozRepl::RemoteObject->install_bridge(
-            repl   => $args{ repl } || undef,
-            launch => $exe,
             log => $loglevel,
             use_queue => $use_queue,
             bufsize => delete $args{ bufsize },
+            %options,
         );
     };
     
@@ -408,6 +409,34 @@ sub set_tab_content {
     
     $tab->{linkedBrowser}->loadURI("".$url);
 };
+
+=head2 C<< $ff->quit( %options ) >>
+
+  $ff->quit( restart => 1 ); # restart
+  $ff->quit(); # quit
+
+Quits or restarts the application
+
+=cut
+
+sub quit {
+    my ($self, %options) = @_;
+    my $repl = $options{ repl } || $self->repl;
+    my $flags = $options{ restart }
+              ? 0x13 # force-quit
+              : 0x03 # force-quit + restart
+              ;
+    
+    my $get_startup = $repl->declare(<<'JS');
+    function() {
+        return Components.classes["@mozilla.org/toolkit/app-startup;1"]
+                     .getService(Components.interfaces.nsIAppStartup);
+    }
+JS
+    my $s = $get_startup->();
+    $s->quit($flags);
+};
+
 
 =head1 TODO
 

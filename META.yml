@@ -1,6 +1,6 @@
 --- #YAML:1.0
 name:               WWW-Mechanize-Firefox
-version:            0.53
+version:            0.54
 abstract:           use Firefox as if it were WWW::Mechanize
 author:
     - Max Maischein <corion@cpan.org>
@@ -18,7 +18,7 @@ requires:
     HTTP::Response:       0
     LWP::Simple:          0
     MIME::Base64:         0
-    MozRepl::RemoteObject:  0.26
+    MozRepl::RemoteObject:  0.27
     Object::Import:       0
     parent:               0
     perl:                 5.006

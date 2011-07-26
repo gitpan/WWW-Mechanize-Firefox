@@ -18,7 +18,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.53';
+$VERSION = '0.54';
 
 =head1 NAME
 
@@ -141,6 +141,15 @@ suitable for initializing one
 C<use_queue> - whether to use the command queueing of L<MozRepl::RemoteObject>.
 Default is 1.
 
+=item *
+
+C<js_JSON> - whether to use native JSON encoder of Firefox
+
+    js_JSON => 'native', # force using the native JSON encoder
+
+The default is to autodetect whether a native JSON encoder is available and
+whether the transport is UTF-8 safe.
+
 =item * 
 
 C<pre_events> - the events that are sent to an input field before its
@@ -159,7 +168,7 @@ sub new {
     my ($class, %args) = @_;
     
     if (! ref $args{ app }) {
-        my @passthrough = qw(launch repl bufsize log use_queue);
+        my @passthrough = qw(launch repl bufsize log use_queue js_JSON);
         my %options = map { exists $args{ $_ } ? ($_ => delete $args{ $_ }) : () } 
                       @passthrough;
         $args{ app } = Firefox::Application->new(
@@ -2022,7 +2031,7 @@ sub xpath {
             #warn ">Searching @$query in $doc->{title}";
             # Munge the multiple @$queries into one:
             my $q = join "|", @$query;
-#            warn $q;
+            #warn $q;
             my @found = map { $doc->__xpath($_, $n) } $q; # @$query;
             #warn "Found $_->{tagName}" for @found;
             push @res, @found;
@@ -2939,14 +2948,14 @@ sub set_visible {
     my $form = $self->current_form;
     my @form;
     if ($form) { @form = (node => $form) };
-    my @visible_fields = $self->xpath(q{//input[@type != "hidden" and @type!= "button"]}, 
+    my @visible_fields = $self->xpath(q{//input[not(@type) or (@type != "hidden" and @type!= "button" and @type!="submit")]}, 
                                       @form
                                       );
     for my $idx (0..$#values) {
         if ($idx > $#visible_fields) {
             $self->signal_condition( "Not enough fields on page" );
         }
-        $visible_fields[ $idx ]->{value} = $values[ $idx ];
+        $self->field( $visible_fields[ $idx ] => $values[ $idx ]);
     }
 }
 
@@ -3237,8 +3246,8 @@ sub content_as_png {
         var win = browser.contentWindow;
         var left = rect.left || 0;
         var top = rect.top || 0;
-        var width = rect.width || win.document.width;
-        var height = rect.height || win.document.height;
+        var width = rect.width || win.document.body.clientWidth;
+        var height = rect.height || win.document.body.clientHeight;
         canvas.width = width;
         canvas.height = height;
         var ctx = canvas.getContext('2d');
