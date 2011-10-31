@@ -18,7 +18,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.55';
+$VERSION = '0.56';
 
 =head1 NAME
 
@@ -213,7 +213,9 @@ sub new {
     $args{ on_event } ||= undef;
     $args{ pre_value } ||= ['focus'];
     $args{ post_value } ||= ['change','blur'];
-    $args{ frames } ||= 1; # we default to searching frames
+    if( ! exists $args{ frames }) {
+        $args{ frames } ||= 1; # we default to searching frames
+    };
 
     die "No tab found"
         unless $args{tab};
@@ -699,10 +701,15 @@ sub get {
         $flags = $self->repl->constant('nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE');
     };
     if (! exists $options{ synchronize }) {
-        $options{ synchronize } = 1;
+        $options{ synchronize } = $self->events;
+    };
+    if( !ref $options{ synchronize }) {
+        $options{ synchronize } = $options{ synchronize }
+                                ? $self->events
+                                : []
     };
     
-    $self->_sync_call( $options{ synchronize }, $self->{events}, sub {
+    $self->_sync_call( $options{ synchronize }, sub {
         if (my $target = delete $options{":content_file"}) {
             $self->save_url($url => ''.$target, %options);
         } else {
@@ -1076,9 +1083,9 @@ sub reload {
 # Internal convenience method for dipatching a call either synchronized
 # or not
 sub _sync_call {
-    my ($self, $synchronize, $events, $cb) = @_;
+    my ($self, $events, $cb) = @_;
 
-    if ($synchronize) {
+    if (@$events) {
         $self->synchronize( $events, $cb );
     } else {
         $cb->();
@@ -1098,8 +1105,13 @@ Returns the (new) response.
 sub back {
     my ($self, $synchronize) = @_;
     $synchronize ||= (@_ != 2);
+    if( !ref $synchronize ) {
+        $synchronize = $synchronize
+                     ? $self->events
+                     : []
+    };
     
-    $self->_sync_call($synchronize, $self->events, sub {
+    $self->_sync_call($synchronize, sub {
         $self->tab->{linkedBrowser}->goBack;
     });
 }
@@ -1117,8 +1129,13 @@ Returns the (new) response.
 sub forward {
     my ($self, $synchronize) = @_;
     $synchronize ||= (@_ != 2);
+    if( !ref $synchronize ) {
+        $synchronize = $synchronize
+                     ? $self->events
+                     : []
+    };
     
-    $self->_sync_call($synchronize, $self->events, sub {
+    $self->_sync_call($synchronize, sub {
         $self->tab->{linkedBrowser}->goForward;
     });
 }
@@ -1930,7 +1947,15 @@ C<frames> setting of the WWW::Mechanize::Firefox object.
 
 =item *
 
-C<< node >> - node relative to which the query is to be executed
+C<< node >> - node relative to which the query is to be executed. Note
+that you will have to use a relative XPath expression as well. Use
+
+  .//foo
+
+instead of
+
+  //foo
+
 
 =item *
 
@@ -2163,6 +2188,15 @@ one of the events listed in C<events> is fired. You want to switch
 it off when there will be no HTTP response or DOM event fired, for
 example for clicks that only modify the DOM.
 
+You can pass in a scalar that is a false value to not wait for
+any kind of event.
+
+Passing in an array reference will use the array elements as
+Javascript events to wait for.
+
+Passing in any other true value will use the value of C<< ->events >>
+as the list of events to wait for.
+
 =back
 
 Returns a L<HTTP::Response> object.
@@ -2202,7 +2236,11 @@ sub click {
     };
     
     if (! exists $options{ synchronize }) {
-        $options{ synchronize } = 1;
+        $options{ synchronize } = $self->events;
+    } elsif( ! ref $options{ synchronize }) {
+        $options{ synchronize } = $options{ synchronize }
+                                ? $self->events
+                                : [],
     };
     
     if ($options{ dom }) {
@@ -2212,7 +2250,7 @@ sub click {
     };
         
     $self->_sync_call(
-        $options{ synchronize }, $self->events, sub { # ,'abort'
+        $options{ synchronize }, sub { # ,'abort'
             $buttons[0]->__click();
         }
     );
@@ -3236,18 +3274,22 @@ sub content_as_png {
     # http://wiki.github.com/bard/mozrepl/interactor-screenshot-server
     my $screenshot = $self->repl->declare(<<'JS');
     function (tab,rect) {
+        var browser = tab.linkedBrowser;
         var browserWindow = Components.classes['@mozilla.org/appshell/window-mediator;1']
             .getService(Components.interfaces.nsIWindowMediator)
             .getMostRecentWindow('navigator:browser');
+        var win = browser.contentWindow;
+        var body = win.document.body;
+        if(!body) {
+            return;
+        };
         var canvas = browserWindow
                .document
                .createElementNS('http://www.w3.org/1999/xhtml', 'canvas');
-        var browser = tab.linkedBrowser;
-        var win = browser.contentWindow;
         var left = rect.left || 0;
         var top = rect.top || 0;
-        var width = rect.width || win.document.body.clientWidth;
-        var height = rect.height || win.document.body.clientHeight;
+        var width = rect.width || body.clientWidth;
+        var height = rect.height || body.clientHeight;
         canvas.width = width;
         canvas.height = height;
         var ctx = canvas.getContext('2d');
@@ -3264,7 +3306,8 @@ sub content_as_png {
         // );
     }
 JS
-    return decode_base64($screenshot->($tab, $rect))
+    my $scr = $screenshot->($tab, $rect);
+    return $scr ? decode_base64($scr) : undef
 };
 
 =head2 C<< $mech->element_as_png( $element ) >>
