@@ -18,7 +18,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec';
-$VERSION = '0.56';
+$VERSION = '0.57';
 
 =head1 NAME
 
@@ -1956,7 +1956,6 @@ instead of
 
   //foo
 
-
 =item *
 
 C<< single >> - If true, ensure that only one element is found. Otherwise croak
@@ -2058,7 +2057,6 @@ sub xpath {
             my $q = join "|", @$query;
             #warn $q;
             my @found = map { $doc->__xpath($_, $n) } $q; # @$query;
-            #warn "Found $_->{tagName}" for @found;
             push @res, @found;
             
             # A small optimization to return if we already have enough elements
@@ -2108,7 +2106,8 @@ sub selector {
     if ('ARRAY' ne (ref $query || '')) {
         $query = [$query];
     };
-    my @q = map { selector_to_xpath($_) } @$query;
+    my $root = $options{ node } ? './' : '';
+    my @q = map { selector_to_xpath($_, root => $root) } @$query;
     $self->xpath(\@q, %options);
 };
 
