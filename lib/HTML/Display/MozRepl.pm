@@ -4,11 +4,11 @@ use Carp qw(carp);
 use WWW::Mechanize::Firefox;
 use parent 'HTML::Display::Common';
 use vars qw($VERSION);
-$VERSION = '0.59';
+$VERSION = '0.60';
 
 =head1 NAME
 
-HTML::Display::MozRepl - use a mozrepl enabled FireFox to display HTML
+HTML::Display::MozRepl - use a mozrepl enabled Firefox to display HTML
 
 =head1 SYNOPSIS
 
@@ -50,7 +50,7 @@ L<http://github.com/Corion/www-mechanize-firefox>.
 
 =head1 AUTHOR
 
-Copyright (c) 2009-2011 Max Maischein C<< <corion@cpan.org> >>
+Copyright (c) 2009-2012 Max Maischein C<< <corion@cpan.org> >>
 
 =head1 LICENSE
 

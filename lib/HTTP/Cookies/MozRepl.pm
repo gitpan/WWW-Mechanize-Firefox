@@ -6,11 +6,11 @@ use parent 'HTTP::Cookies';
 use Carp qw[croak];
 
 use vars qw[$VERSION];
-$VERSION = '0.59';
+$VERSION = '0.60';
 
 =head1 NAME
 
-HTTP::Cookies::MozRepl - retrieve cookies from a live FireFox instance
+HTTP::Cookies::MozRepl - retrieve cookies from a live Firefox instance
 
 =head1 SYNOPSIS
 
@@ -21,16 +21,16 @@ HTTP::Cookies::MozRepl - retrieve cookies from a live FireFox instance
 =head1 DESCRIPTION
 
 This package overrides the load() and save() methods of HTTP::Cookies
-so it can work with a live FireFox instance.
+so it can work with a live Firefox instance.
 
-Note: To use this module, FireFox must be running and it must
+Note: To use this module, Firefox must be running and it must
 have the C<mozrepl> extension installed.
 
 See L<HTTP::Cookies>.
 
 =head1 Reusing an existing connection
 
-If you already have an existing connection to FireFox
+If you already have an existing connection to Firefox
 that you want to reuse, just pass the L<MozRepl::RemoteObject>
 instance to the cookie jar constructor in the C<repl> parameter:
 
@@ -128,7 +128,7 @@ __END__
 L<https://developer.mozilla.org/en/nsICookieManager> -
 nsICookieManager documentation
 
-L<HTTP::Cookies> - the used interface
+L<HTTP::Cookies> - the interface used
 
 =head1 REPOSITORY
 
@@ -141,7 +141,7 @@ Max Maischein C<corion@cpan.org>
 
 =head1 COPYRIGHT (c)
 
-Copyright 2009-2011 by Max Maischein C<corion@cpan.org>.
+Copyright 2009-2012 by Max Maischein C<corion@cpan.org>.
 
 =head1 LICENSE
 

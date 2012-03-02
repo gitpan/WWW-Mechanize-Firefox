@@ -18,7 +18,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.59';
+$VERSION = '0.60';
 
 =head1 NAME
 
@@ -3324,7 +3324,7 @@ sub content_as_png {
         var width = rect.width || body.clientWidth;
         var height = rect.height || body.clientHeight;
         
-        if( isNaN( target_rect.scalex * target_rect.scaley )) {
+        if( isNaN( target_rect.scalex * target_rect.scaley ) || target_rect.scalex * target_rect.scaley == 0) {
             // No scale was given
             // Was a fixed target width / height given?
             if( target_rect.width ) {
@@ -3339,7 +3339,7 @@ sub content_as_png {
             target_rect.scalex = target_rect.scalex || target_rect.scaley || (target_rect.width / width) || 1.0;
             target_rect.scaley = target_rect.scaley || target_rect.scalex || (target_rect.height / height) || 1.0;
         } else {
-            // alert("scales fixed");
+            //alert("scales fixed");
         };
         // Calculate the target width/height if missing:
         target_rect.height = target_rect.height || height * target_rect.scaley;
@@ -3643,7 +3643,7 @@ Max Maischein C<corion@cpan.org>
 
 =head1 COPYRIGHT (c)
 
-Copyright 2009-2011 by Max Maischein C<corion@cpan.org>.
+Copyright 2009-2012 by Max Maischein C<corion@cpan.org>.
 
 =head1 LICENSE
 
