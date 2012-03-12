@@ -41,6 +41,18 @@ so many of the recipes in L<WWW::Mechanize::Cookbook> apply to it as well.
   );
   $mech->get('http://google.com');
 
+=head2 Use some other tab if you have it as object
+
+    my $app = Firefox::Application->new();
+    my @tabs =  map { $_->{tab} }
+               grep { $magic eq $_->{title} }
+               $app->openTabs($repl);
+
+    my $synth_mech = WWW::Mechanize::Firefox->new(
+        tab => $tabs[0],
+        app => $app,
+    );
+
 =head2 Bring the tab to the foreground at start
 
   use WWW::Mechanize::Firefox;
@@ -88,7 +100,7 @@ use the following code:
     while ($retries-- and ! $mech->is_visible( xpath => '//*[@id="submit"]' )) {
           sleep 1;
     };
-    die "Timeout" unless $retries;
+    die "Timeout" if 0 > $retries;
     
     # Now the element exists
     $mech->click({xpath => '//*[@id="submit"]'});
@@ -104,7 +116,7 @@ use the following code:
     while ($retries-- and $mech->is_visible( xpath => '//*[@id="hourglass"]' )) {
           sleep 1;
     };
-    die "Timeout while waiting for application" unless $retries;
+    die "Timeout while waiting for application" if 0 > $retries;
     
     # Now the hourglass is not visible anymore
 
@@ -193,6 +205,31 @@ distribution.
 Just pass empty lists for the lists of events to invoke
 
   $mech->field( 'myfield', 'myvalue', [], [] );
+
+=head3 Get the text of an C<onclick> handler (or other attributes)
+
+When developing a web page, you may want to use WWW::Mechanize::Firefox
+to check the text value of the C<onclick> attribute instead of treating
+it as an opaque function. To get at the text attribute, you will
+need the DOM function C<< ->getAttribute() >>.
+
+    #!perl -w
+    use strict;
+    use WWW::Mechanize::Firefox;
+
+    my $mech = WWW::Mechanize::Firefox->new();
+    $mech->update_html(<<HTML);
+    <html>
+    <h1>Test</h1>
+    <a href="http://google.de">Google</a>
+    <a href="asdf.html" onclick="javascript:alert('hello');">Say Hello</a>
+    </html>
+    HTML
+
+    my @links = $mech->find_all_links_dom(url_regex => 'asdf.html');
+    foreach my $link (@links) {
+        print $link->getAttribute('onclick');
+    };
 
 =head1 Not working yet
 
