@@ -18,6 +18,8 @@ no_index:
     - t
     - inc
 requires:
+  Cwd: 0
+  File::Basename: 0
   HTML::Selector::XPath: 0
   HTTP::Cookies: 0
   HTTP::Daemon: 0
@@ -37,4 +39,4 @@ requires:
   perl: 5.006
 resources:
   repository: http://github.com/Corion/www-mechanize-firefox
-version: 0.61
+version: 0.62

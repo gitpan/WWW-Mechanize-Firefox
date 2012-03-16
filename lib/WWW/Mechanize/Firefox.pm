@@ -1,24 +1,23 @@
 package WWW::Mechanize::Firefox;
 use 5.006; #weaken
 use strict;
-use Time::HiRes; # hires sleep()
+use Time::HiRes qw(sleep); # hires sleep()
 
-use URI;
-use Cwd;
+use URI ();
 use File::Basename qw(dirname);
-use HTTP::Response;
+use HTTP::Response ();
 use HTML::Selector::XPath 'selector_to_xpath';
-use MIME::Base64;
+use MIME::Base64 'decode_base64';
 use WWW::Mechanize::Link;
 use Firefox::Application;
 use MozRepl::RemoteObject ();
-use HTTP::Cookies::MozRepl;
+use HTTP::Cookies::MozRepl ();
 use Scalar::Util qw'blessed weaken';
 use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.61';
+$VERSION = '0.62';
 
 =head1 NAME
 
@@ -750,9 +749,10 @@ also exist in WWW::Mechanize through a plugin.
 
 sub get_local {
     my ($self, $htmlfile, %options) = @_;
+    require Cwd;
     my $fn = File::Spec->rel2abs(
                  File::Spec->catfile(dirname($0),$htmlfile),
-                 getcwd,
+                 Cwd::getcwd(),
              );
     $fn =~ s!\\!/!g; # fakey "make file:// URL"
 
@@ -2441,7 +2441,7 @@ sub form_number {
     my ($self,$number,%options) = @_;
 
     _default_limiter( single => \%options );
-    $self->{current_form} = $self->xpath("//form[$number]",
+    $self->{current_form} = $self->xpath("(//form)[$number]",
         user_info => "form number $number",
         %options
     );

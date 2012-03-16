@@ -27,6 +27,8 @@ WriteMakefile1(
     'PREREQ_PM'     => { 'MozRepl::RemoteObject' => 0.27, # v0.27 implements sane encoding fixes
                         'URI' => 0,
                         'URI::data' => 0,
+                        'Cwd' => 0, # only needed in ->get_local, mostly exercised by the tests
+                        'File::Basename' => 0,
                         'HTTP::Response' => 0, # for interface compatibility with WWW::Mechanize
                         'HTTP::Cookies' => 0, # for HTTP::Cookies::MozRepl
                         'HTTP::Date' => 0, # get a date online?!
