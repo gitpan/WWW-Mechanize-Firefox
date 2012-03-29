@@ -17,7 +17,10 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.63';
+$VERSION = '0.64';
+@CARP_NOT = ('MozRepl::RemoteObject',
+             'MozRepl::AnyEvent',
+             'MozRepl::RemoteObject::Instance'); # we trust these blindly
 
 =head1 NAME
 
@@ -439,9 +442,7 @@ JS
     $window ||= $self->tab->{linkedBrowser}->{contentWindow};
     # Report errors from scope of caller
     # This feels weirdly backwards here, but oh well:
-    @CARP_NOT = (ref $self->repl); # we trust this
-    #local @MozRepl::RemoteObject::Instance::CARP_NOT = (@MozRepl::RemoteObject::Instance::CARP_NOT,__PACKAGE__);
-    #local @MozRepl::RemoteObject::CARP_NOT = (@MozRepl::RemoteObject::CARP_NOT,__PACKAGE__);
+    #local @CARP_NOT = (ref $self->repl); # we trust this
     
     my ($caller,$line) = (caller)[1,2];
     
@@ -1202,48 +1203,67 @@ sub docshell {
     $self->tab->__dive(qw[linkedBrowser docShell]);
 }
 
-=head2 C<< $mech->content >>
+=head2 C<< $mech->content( %options ) >>
 
   print $mech->content;
+  print $mech->content( format => 'html' ); # default
+  print $mech->content( format => 'text' ); # identical to ->text
 
 This always returns the content as a Unicode string. It tries
 to decode the raw content according to its input encoding.
+This currently only works for HTML pages, not for images etc.
 
-This is likely not binary-safe.
+Recognized options:
 
-It also currently only works for HTML pages.
+=over 4
+
+=item *
+
+C<document> - the document to use.
+
+Default is C<< $self->document >>.
+
+=item *
+
+C<format> - the stuff to return
+
+The allowed values are C<html> and C<text>. The default is C<html>.
+
+=back
 
 =cut
 
 sub content {
     my ($self, %options) = @_;
-    my $d = $self->document; # keep a reference to it!
+    $options{ format } ||= 'html';
     
-    my $html = $self->repl->declare(<<'JS', 'list');
-function(d){
-    var e = d.createElement("div");
-    e.appendChild(d.documentElement.cloneNode(true));
-    return [e.innerHTML,d.inputEncoding];
-}
+    my $d = delete $options{ document } || $self->document; # keep a reference to it!
+    my $format = delete $options{ format } || 'html';
+    my $content;
+
+    if( $format eq 'html' ) {
+        my $html = $self->repl->declare(<<'JS', 'list');
+            function(d){
+                var e = d.createElement("div");
+                e.appendChild(d.documentElement.cloneNode(true));
+                return [e.innerHTML,d.inputEncoding];
+            }
 JS
-    # We return the raw bytes here.
-    my ($content,$encoding) = $html->($d);
-    if (! utf8::is_utf8($content)) {
-        #warn "Switching on UTF-8 (from $encoding)";
-        # Switch on UTF-8 flag
-        # This should never happen, as JSON::XS (and JSON) should always
-        # already return proper UTF-8
-        # But it does happen.
-        $content = Encode::decode($encoding, $content);
-    };
-    
-    if ( my $format = delete $options{format} ) {
-        if ( $format eq 'text' ) {
-            $content = $self->text;
-        }
-        else {
-            $self->die( qq{Unknown "format" parameter "$format"} );
-        }
+        # We return the raw bytes here.
+        ($content,my $encoding) = $html->($d);
+        if (! utf8::is_utf8($content)) {
+            #warn "Switching on UTF-8 (from $encoding)";
+            # Switch on UTF-8 flag
+            # This should never happen, as JSON::XS (and JSON) should always
+            # already return proper UTF-8
+            # But it does happen.
+            $content = Encode::decode($encoding, $content);
+        };
+    } elsif ( $format eq 'text' ) {
+        $content = $self->text;
+    }
+    else {
+        $self->die( qq{Unknown "format" parameter "$format"} );
     }
 
     return $content
@@ -3232,7 +3252,7 @@ sub expand_frames {
     my @spec = ref $spec ? @$spec : $spec;
     $document ||= $self->document;
     
-    if ($spec == 1) {
+    if (! ref $spec and $spec !~ /\D/ and $spec == 1) {
         # All frames
         @spec = qw( frame iframe );
     };
