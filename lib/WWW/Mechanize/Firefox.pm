@@ -11,13 +11,14 @@ use MIME::Base64 'decode_base64';
 use WWW::Mechanize::Link;
 use Firefox::Application;
 use MozRepl::RemoteObject ();
+use MozRepl::RemoteObject::Methods ();
 use HTTP::Cookies::MozRepl ();
 use Scalar::Util qw'blessed weaken';
 use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.64';
+$VERSION = '0.65';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
              'MozRepl::RemoteObject::Instance'); # we trust these blindly
@@ -111,6 +112,11 @@ To make errors non-fatal, pass
     autodie => 0
 
 in the constructor.
+
+=item *
+
+C<agent> - the name of the User Agent to use. This overrides
+how Firefox identifies itself.
 
 =item * 
 
@@ -211,7 +217,7 @@ sub new {
     if (! $args{ tab }) {
         my @autoclose = exists $args{ autoclose } ? (autoclose => $args{ autoclose }) : ();
         $args{ tab } = $args{ app }->addTab( @autoclose );
-        my $body = $args{ tab }->__dive(qw[ linkedBrowser contentWindow document body ]);
+        my $body = $args{ tab }->MozRepl::RemoteObject::Methods::dive(qw[ linkedBrowser contentWindow document body ]);
         $body->{innerHTML} = __PACKAGE__;
     };
 
@@ -238,7 +244,15 @@ sub new {
     $args{ response } ||= undef;
     $args{ current_form } ||= undef;
     
-    bless \%args, $class;
+    my $agent = delete $args{ agent };
+    
+    my $self= bless \%args, $class;
+    
+    if( defined $agent ) {
+        $self->agent( $agent );
+    };
+    
+    $self
 };
 
 sub DESTROY {
@@ -252,6 +266,29 @@ sub DESTROY {
     };
     #warn "FF cleaned up";
 }
+
+=head2 C<< $mech->agent( $product_id ); >>
+
+    $mech->agent('wonderbot/JS 1.0');
+
+Set the product token that is used to identify the user agent on the network.
+The agent value is sent as the "User-Agent" header in the requests. The default
+is whatever Firefox uses.
+
+To reset the user agent to the Firefox default, pass an empty string:
+
+    $mech->agent('');
+
+=cut
+
+sub agent {
+    my ($self,$name) = @_;
+    if( defined $name ) {
+        $self->add_header('User-Agent',$name);
+    } elsif( $name eq '' ) {
+        $self->delete_header('User-Agent');
+    };
+};
 
 =head1 JAVASCRIPT METHODS
 
@@ -352,7 +389,7 @@ JS
     $getErrorMessages->($console);
 }
 
-=head2 C<< $mech->clear_js_errors >>
+=head2 C<< $mech->clear_js_errors() >>
 
     $mech->clear_js_errors();
 
@@ -489,7 +526,7 @@ sub autoclose_tab {
     $self->application->autoclose_tab(@_);
 };
 
-=head2 C<< $mech->tab >>
+=head2 C<< $mech->tab() >>
 
 Gets the object that represents the Firefox tab used by WWW::Mechanize::Firefox.
 
@@ -576,7 +613,7 @@ JS
     $lsn
 };
 
-=head2 C<< $mech->repl >>
+=head2 C<< $mech->repl() >>
 
   my ($value,$type) = $mech->repl->expr('2+2');
 
@@ -588,7 +625,7 @@ This method is special to WWW::Mechanize::Firefox.
 
 sub repl { $_[0]->application->repl };
 
-=head2 C<< $mech->events >>
+=head2 C<< $mech->events() >>
 
   $mech->events( ['load'] );
 
@@ -601,7 +638,7 @@ This method is special to WWW::Mechanize::Firefox.
 
 sub events { $_[0]->{events} = $_[1] if (@_ > 1); $_[0]->{events} };
 
-=head2 C<< $mech->on_event >>
+=head2 C<< $mech->on_event() >>
 
   $mech->on_event(1); # prints every page load event
 
@@ -618,7 +655,7 @@ This method is special to WWW::Mechanize::Firefox.
 
 sub on_event { $_[0]->{on_event} = $_[1] if (@_ > 1); $_[0]->{on_event} };
 
-=head2 C<< $mech->cookies >>
+=head2 C<< $mech->cookies() >>
 
   my $cookie_jar = $mech->cookies();
 
@@ -760,6 +797,121 @@ sub get_local {
     $self->get("file://$fn", %options);
 }
 
+=head2 C<< $mech->add_header( $name => $value, ... ) >>
+
+    $mech->add_header(
+        'X-WWW-Mechanize-Firefox' => "I'm using it",
+        Encoding => 'text/klingon',
+    );
+
+This method sets up custom headers that will be sent with B<every> HTTP(S)
+request that Firefox makes.
+
+Using multiple instances of WWW::Mechanize::Firefox objects with the same
+application together with changed request headers will most likely have weird
+effects. So don't do that.
+
+=cut
+
+# This subroutine creates the custom header observer. It has a hashref
+# of headers that it will add to EACH request that Firefox sends out.
+# It removes itself when the Perl object gets destroyed.
+sub _custom_header_observer {
+    my ($self, @headers) = @_;
+
+    # This routine was taken from http://d.hatena.ne.jp/oppara/20090410/p1
+    my $on_modify_request = $self->repl->declare(<<'JS');
+        function() { // headers passed via arguments
+            const Cc= Components.classes;
+            const Ci= Components.interfaces;
+            const observerService= Cc['@mozilla.org/observer-service;1'].getService(Ci.nsIObserverService);
+            var h= [].slice.call(arguments);
+            var hr= {};
+            for( var i=0; i<h.length; i+=2) {
+                var k= h[i];
+                var v= h[i+1];
+                hr[k]= v;
+            };
+                
+            var myObserver= {
+                headers: hr,
+                observe: function(subject,topic,data) {
+                    if(topic != 'http-on-modify-request') return;
+                    
+                    var http = subject.QueryInterface(Ci.nsIHttpChannel);
+                    for( var k in this.headers) {
+                        var v= this.headers[k];
+                        http.setRequestHeader(k,v, false);
+
+                        if (k== 'Referer' && http.referrer) {
+                            http.referrer.spec = v;
+                        };
+                    };
+                }
+            }
+            observerService.addObserver(myObserver,'http-on-modify-request',false);
+            return myObserver;
+        };      
+JS
+    my $obs = $on_modify_request->(@headers);
+
+    # Clean up after ourselves    
+    $obs->__release_action(<<'JS');
+        const Cc= Components.classes;
+        const Ci= Components.interfaces;
+        const observerService= Cc['@mozilla.org/observer-service;1'].getService(Ci.nsIObserverService);
+        try {
+            observerService.removeObserver(self,'http-on-modify-request',false);
+        } catch (e) {}
+JS
+    return $obs;
+};
+
+sub add_header {
+    my ($self, @headers) = @_;
+    $self->{custom_header_observer} ||= $self->_custom_header_observer;
+    
+    # This is slooow, but we only do it when changing the headers...
+    my $h = $self->{custom_header_observer}->{headers};
+    while( my ($k,$v) = splice @headers, 0, 2 ) {
+        $h->{$k} = $v;
+    };
+};
+
+=head2 C<< $mech->delete_header( $name , $name2... ) >>
+
+    $mech->delete_header( 'User-Agent' );
+    
+Removes HTTP headers from the agent's list of special headers. Note
+that Firefox may still send a header with its default value.
+
+=cut
+
+sub delete_header {
+    my ($self, @headers) = @_;
+    
+    if( $self->{custom_header_observer} and @headers ) {
+        # This is slooow, but we only do it when changing the headers...
+        my $h = $self->{custom_header_observer}->{headers};
+        
+        delete $h->{$_}
+            for( @headers );
+    };
+};
+
+=head2 C<< $mech->reset_headers >>
+
+    $mech->reset_headers();
+
+Removes all custom headers and makes Firefox send its defaults again.
+
+=cut
+
+sub reset_headers {
+    my ($self) = @_;
+    delete $self->{custom_header_observer};
+};
+
 # Should I port this to Perl?
 # Should this become part of MozRepl::RemoteObject?
 # This should get passed 
@@ -846,7 +998,7 @@ Usually, you want to use it like this:
 
   my $l = $mech->xpath('//a[@onclick]', single => 1);
   $mech->synchronize('DOMFrameContentLoaded', sub {
-      $l->__click()
+      $mech->click( $l );
   });
 
 It is necessary to synchronize with the browser whenever
@@ -961,7 +1113,7 @@ sub synchronize {
     };
 };
 
-=head2 C<< $mech->res >> / C<< $mech->response >>
+=head2 C<< $mech->res() >> / C<< $mech->response() >>
 
     my $response = $mech->response();
 
@@ -1039,7 +1191,7 @@ sub response {
 }
 *res = \&response;
 
-=head2 C<< $mech->success >>
+=head2 C<< $mech->success() >>
 
     $mech->get('http://google.com');
     print "Yay"
@@ -1057,7 +1209,7 @@ sub success {
     $res and $res->is_success
 }
 
-=head2 C<< $mech->status >>
+=head2 C<< $mech->status() >>
 
     $mech->get('http://google.com');
     print $mech->status();
@@ -1156,7 +1308,7 @@ sub forward {
     });
 }
 
-=head2 C<< $mech->uri >>
+=head2 C<< $mech->uri() >>
 
     print "We are at " . $mech->uri;
 
@@ -1166,7 +1318,7 @@ Returns the current document URI.
 
 sub uri {
     my ($self) = @_;
-    my $loc = $self->tab->__dive(qw[
+    my $loc = $self->tab->MozRepl::RemoteObject::Methods::dive(qw[
         linkedBrowser
         currentURI
         asciiSpec ]);
@@ -1175,7 +1327,7 @@ sub uri {
 
 =head1 CONTENT METHODS
 
-=head2 C<< $mech->document >>
+=head2 C<< $mech->document() >>
 
 Returns the DOM document object.
 
@@ -1185,10 +1337,10 @@ This is WWW::Mechanize::Firefox specific.
 
 sub document {
     my ($self) = @_;
-    $self->tab->__dive(qw[linkedBrowser contentWindow document]);
+    $self->tab->MozRepl::RemoteObject::Methods::dive(qw[linkedBrowser contentWindow document]);
 }
 
-=head2 C<< $mech->docshell >>
+=head2 C<< $mech->docshell() >>
 
     my $ds = $mech->docshell;
 
@@ -1200,7 +1352,7 @@ This is WWW::Mechanize::Firefox specific.
 
 sub docshell {
     my ($self) = @_;
-    $self->tab->__dive(qw[linkedBrowser docShell]);
+    $self->tab->MozRepl::RemoteObject::Methods::dive(qw[linkedBrowser docShell]);
 }
 
 =head2 C<< $mech->content( %options ) >>
@@ -1269,7 +1421,7 @@ JS
     return $content
 };
 
-=head2 $mech->text()
+=head2 C<< $mech->text() >>
 
 Returns the text of the current HTML content.  If the content isn't
 HTML, $mech will die.
@@ -1285,7 +1437,7 @@ sub text {
 }
 
 
-=head2 C<< $mech->content_encoding >>
+=head2 C<< $mech->content_encoding() >>
 
     print "The content is encoded as ", $mech->content_encoding;
 
@@ -1485,7 +1637,7 @@ JS
     $transfer_file->("$url" => $localname, $options{progress});
 }
 
-=head2 C<< $mech->base >>
+=head2 C<< $mech->base() >>
 
   print $mech->base;
 
@@ -1506,9 +1658,9 @@ sub base {
     $base ||= $self->uri;
 };
 
-=head2 C<< $mech->content_type >>
+=head2 C<< $mech->content_type() >>
 
-=head2 C<< $mech->ct >>
+=head2 C<< $mech->ct() >>
 
   print $mech->content_type;
 
@@ -1537,7 +1689,7 @@ sub is_html {
     return defined $self->ct && ($self->ct eq 'text/html');
 }
 
-=head2 C<< $mech->title >>
+=head2 C<< $mech->title() >>
 
   print "We are on page " . $mech->title;
 
@@ -1552,7 +1704,7 @@ sub title {
 
 =head1 EXTRACTION METHODS
 
-=head2 C<< $mech->links >>
+=head2 C<< $mech->links() >>
 
   print $_->text . " -> " . $_->url . "\n"
       for $mech->links;
@@ -1927,9 +2079,9 @@ sub find_all_links_dom {
     return \@matches;
 };
 
-=head2 C<< $mech->follow_link $link >>
+=head2 C<< $mech->follow_link( $link ) >>
 
-=head2 C<< $mech->follow_link %options >>
+=head2 C<< $mech->follow_link( %options ) >>
 
   $mech->follow_link( xpath => '//a[text() = "Click here!"]' );
 
@@ -1955,7 +2107,7 @@ sub follow_link {
     }
 }
 
-=head2 C<< $mech->xpath $query, %options >>
+=head2 C<< $mech->xpath( $query, %options ) >>
 
     my $link = $mech->xpath('//a[id="clickme"]', one => 1);
     # croaks if there is no link or more than one link found
@@ -2120,7 +2272,7 @@ sub xpath {
     return $return_first ? $res[0] : @res;
 };
 
-=head2 C<< $mech->selector $css_selector, %options >>
+=head2 C<< $mech->selector( $css_selector, %options ) >>
 
   my @text = $mech->selector('p.content');
 
@@ -2146,7 +2298,7 @@ sub selector {
     $self->xpath(\@q, %options);
 };
 
-=head2 C<< $mech->by_id $id, %options >>
+=head2 C<< $mech->by_id( $id, %options ) >>
 
   my @text = $mech->by_id('_foo:bar');
 
@@ -2175,7 +2327,7 @@ sub by_id {
     $self->xpath($query, %options)
 }
 
-=head2 C<< $mech->click $name [,$x ,$y] >>
+=head2 C<< $mech->click( $name [,$x ,$y] ) >>
 
   $mech->click( 'go' );
   $mech->click({ xpath => '//button[@name="go"]' });
@@ -2373,7 +2525,7 @@ sub click_button {
 
 =head1 FORM METHODS
 
-=head2 C<< $mech->current_form >>
+=head2 C<< $mech->current_form() >>
 
   print $mech->current_form->{name};
 
@@ -2404,12 +2556,12 @@ sub clear_current_form {
     undef $_[0]->{current_form};
 };
 
-=head2 C<< $mech->form_name $name [, %options] >>
+=head2 C<< $mech->form_name( $name [, %options] ) >>
 
   $mech->form_name( 'search' );
 
 Selects the current form by its name. The options
-are identical to those accepted by the L</$mech->xpath> method.
+are identical to those accepted by the L<< /$mech->xpath >> method.
 
 =cut
 
@@ -2423,13 +2575,13 @@ sub form_name {
     );
 };
 
-=head2 C<< $mech->form_id $id [, %options] >>
+=head2 C<< $mech->form_id( $id [, %options] ) >>
 
   $mech->form_id( 'login' );
 
 Selects the current form by its C<id> attribute.
 The options
-are identical to those accepted by the L</$mech->xpath> method.
+are identical to those accepted by the L<< /$mech->xpath >> method.
 
 This is equivalent to calling
 
@@ -2447,7 +2599,7 @@ sub form_id {
     );
 };
 
-=head2 C<< $mech->form_number $number [, %options] >>
+=head2 C<< $mech->form_number( $number [, %options] ) >>
 
   $mech->form_number( 2 );
 
@@ -2467,7 +2619,7 @@ sub form_number {
     );
 };
 
-=head2 C<< $mech->form_with_fields [$options], @fields >>
+=head2 C<< $mech->form_with_fields( [$options], @fields ) >>
 
   $mech->form_with_fields(
       'user', 'password'
@@ -2500,7 +2652,7 @@ sub form_with_fields {
     );
 };
 
-=head2 C<< $mech->forms %options >>
+=head2 C<< $mech->forms( %options ) >>
 
   my @forms = $mech->forms();
 
@@ -2523,7 +2675,7 @@ sub forms {
                      : \@res
 };
 
-=head2 C<< $mech->field $selector, $value, [,\@pre_events [,\@post_events]] >>
+=head2 C<< $mech->field( $selector, $value, [,\@pre_events [,\@post_events]] ) >>
 
   $mech->field( user => 'joe' );
   $mech->field( not_empty => '', [], [] ); # bypass JS validation
@@ -2843,7 +2995,7 @@ sub tick {
     };
 };
 
-=head2 C<< $mech->untick($name, $value) >>
+=head2 C<< $mech->untick( $name, $value ) >>
 
   $mech->untick('spam_confirm','yes',undef)
 
@@ -2858,13 +3010,16 @@ sub untick {
     $self->tick( $name, $value, undef );
 };
 
-=head2 C<< $mech->submit >>
+=head2 C<< $mech->submit( $form ) >>
 
   $mech->submit;
 
-Submits the current form. Note that this does B<not> fire the C<onClick>
+Submits the form. Note that this does B<not> fire the C<onClick>
 event and thus also does not fire eventual Javascript handlers.
 Maybe you want to use C<< $mech->click >> instead.
+
+The default is to submit the current form as returned
+by C<< $mech->current_form >>.
 
 =cut
 
@@ -3031,9 +3186,9 @@ sub set_visible {
     }
 }
 
-=head2 C<< $mech->is_visible $element >>
+=head2 C<< $mech->is_visible( $element ) >>
 
-=head2 C<< $mech->is_visible %options >>
+=head2 C<< $mech->is_visible(  %options ) >>
 
   if ($mech->is_visible( selector => '#login' )) {
       print "You can log in now.";
@@ -3217,7 +3372,7 @@ sub _option_query {
     return $self->$method( $q, %options );
 };
 
-=head2 C<< $mech->clickables >>
+=head2 C<< $mech->clickables() >>
 
     print "You could click on\n";
     for my $el ($mech->clickables) {
@@ -3283,6 +3438,9 @@ sub expand_frames {
 
     my $png_data = $mech->content_as_png();
 
+    # Create scaled-down 480px wide preview
+    my $png_data = $mech->content_as_png(undef, undef, { width => 480 });
+
 Returns the given tab or the current page rendered as PNG image.
 
 All parameters are optional. 
@@ -3310,7 +3468,7 @@ C<width>, C<height> - for specifying the target size
 
 If you want the resulting image to be 480 pixels wide, specify
 
-    { width: 480 }
+    { width => 480 }
 
 The height will then be calculated from the ratio of original width to
 original height.
@@ -3461,8 +3619,8 @@ relatively slow currently.
 
 =head1 INCOMPATIBILITIES WITH WWW::Mechanize
 
-As this module is in a very early stage of development,
-there are many incompatibilities. The main thing is
+There are many incompatibilities with L<WWW::Mechanize>, but enough
+similarities to warrant the same namespace. The main thing is
 that only the most needed WWW::Mechanize methods
 have been implemented by me so far.
 
@@ -3524,14 +3682,6 @@ they make little sense in the context of Firefox.
 
 =item *
 
-C<< ->add_header >>
-
-=item *
-
-C<< ->delete_header >>
-
-=item *
-
 C<< ->clone >>
 
 =item *
@@ -3589,21 +3739,9 @@ into their own Mechanize plugin(s).
 
 =back
 
-=head1 INSTALLING
+=head1 INSTALLATION
 
-=over 4
-
-=item *
-
-Install the C<mozrepl> add-on into Firefox
-
-=item *
-
-Start the C<mozrepl> add-on or you will see test failures/skips
-in the module when calling C<< ->new >>. You may want to set
-C<mozrepl> to start when the browser starts.
-
-=back
+See L<WWW::Mechanize::Firefox::Troubleshooting>.
 
 =head1 SEE ALSO
 
