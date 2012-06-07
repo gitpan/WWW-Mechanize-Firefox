@@ -128,6 +128,7 @@ t/65-is_visible_remove.html
 t/65-is_visible_text.html
 t/65-mech-meta.html
 t/65-mech-meta.t
+t/65-set_visible.t
 t/70-download-url.t
 t/70-mech-png.t
 t/70-real-status.t

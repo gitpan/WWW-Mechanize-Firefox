@@ -18,7 +18,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.65';
+$VERSION = '0.66';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
              'MozRepl::RemoteObject::Instance'); # we trust these blindly
@@ -42,7 +42,7 @@ that plugin in your Firefox.
 
 For more examples see L<WWW::Mechanize::Firefox::Examples>.
 
-=head1 METHODS
+=head1 CONSTRUCTOR and CONFIGURATION
 
 =head2 C<< $mech->new( %args ) >>
 
@@ -290,6 +290,64 @@ sub agent {
     };
 };
 
+=head2 C<< $mech->autodie( [$state] ) >>
+
+  $mech->autodie(0);
+
+Accessor to get/set whether warnings become fatal.
+
+=cut
+
+sub autodie { $_[0]->{autodie} = $_[1] if @_ == 2; $_[0]->{autodie} }
+
+=head2 C<< $mech->events() >>
+
+  $mech->events( ['load'] );
+
+Sets or gets the set of Javascript events that WWW::Mechanize::Firefox
+will wait for after requesting a new page. Returns an array reference.
+
+This method is special to WWW::Mechanize::Firefox.
+
+=cut
+
+sub events { $_[0]->{events} = $_[1] if (@_ > 1); $_[0]->{events} };
+
+=head2 C<< $mech->on_event() >>
+
+  $mech->on_event(1); # prints every page load event
+
+  # or give it a callback
+  $mech->on_event(sub { warn "Page loaded with $ev->{name} event" });
+
+Gets/sets the notification handler for the Javascript event
+that finished a page load. Set it to C<1> to output via C<warn>,
+or a code reference to call it with the event.
+
+This method is special to WWW::Mechanize::Firefox.
+
+=cut
+
+sub on_event { $_[0]->{on_event} = $_[1] if (@_ > 1); $_[0]->{on_event} };
+
+=head2 C<< $mech->cookies() >>
+
+  my $cookie_jar = $mech->cookies();
+
+Returns a L<HTTP::Cookies> object that was initialized
+from the live Firefox instance.
+
+B<Note:> C<< ->set_cookie >> is not yet implemented,
+as is saving the cookie jar.
+
+=cut
+
+sub cookies {
+    return HTTP::Cookies::MozRepl->new(
+        repl => $_[0]->repl
+    )
+}
+
 =head1 JAVASCRIPT METHODS
 
 =head2 C<< $mech->allow( %options ) >>
@@ -521,6 +579,14 @@ more parts of the Firefox UI and application.
 
 sub application { $_[0]->{app} };
 
+=head2 C<< $mech->autoclose_tab >>
+
+  $mech->autoclose_tab( 0 ); # keep tab open after program end
+
+Set whether to close the tab associated with the instance.
+
+=cut
+
 sub autoclose_tab {
     my $self = shift;
     $self->application->autoclose_tab(@_);
@@ -535,16 +601,6 @@ This method is special to WWW::Mechanize::Firefox.
 =cut
 
 sub tab { $_[0]->{tab} };
-
-=head2 C<< $mech->autodie( [$state] ) >>
-
-  $mech->autodie(0);
-
-Accessor to get/set whether warnings become fatal.
-
-=cut
-
-sub autodie { $_[0]->{autodie} = $_[1] if @_ == 2; $_[0]->{autodie} }
 
 =head2 C<< $mech->progress_listener( $source, %callbacks ) >>
 
@@ -624,54 +680,6 @@ This method is special to WWW::Mechanize::Firefox.
 =cut
 
 sub repl { $_[0]->application->repl };
-
-=head2 C<< $mech->events() >>
-
-  $mech->events( ['load'] );
-
-Sets or gets the set of Javascript events that WWW::Mechanize::Firefox
-will wait for after requesting a new page. Returns an array reference.
-
-This method is special to WWW::Mechanize::Firefox.
-
-=cut
-
-sub events { $_[0]->{events} = $_[1] if (@_ > 1); $_[0]->{events} };
-
-=head2 C<< $mech->on_event() >>
-
-  $mech->on_event(1); # prints every page load event
-
-  # or give it a callback
-  $mech->on_event(sub { warn "Page loaded with $ev->{name} event" });
-
-Gets/sets the notification handler for the Javascript event
-that finished a page load. Set it to C<1> to output via C<warn>,
-or a code reference to call it with the event.
-
-This method is special to WWW::Mechanize::Firefox.
-
-=cut
-
-sub on_event { $_[0]->{on_event} = $_[1] if (@_ > 1); $_[0]->{on_event} };
-
-=head2 C<< $mech->cookies() >>
-
-  my $cookie_jar = $mech->cookies();
-
-Returns a L<HTTP::Cookies> object that was initialized
-from the live Firefox instance.
-
-B<Note:> C<< ->set_cookie >> is not yet implemented,
-as is saving the cookie jar.
-
-=cut
-
-sub cookies {
-    return HTTP::Cookies::MozRepl->new(
-        repl => $_[0]->repl
-    )
-}
 
 =head2 C<< $mech->highlight_node( @nodes ) >>
 
@@ -2332,9 +2340,9 @@ sub by_id {
   $mech->click( 'go' );
   $mech->click({ xpath => '//button[@name="go"]' });
 
-Has the effect of clicking a button on the current form. The first argument
-is the C<name> of the button to be clicked. The second and third arguments
-(optional) allow you to specify the (x,y) coordinates of the click.
+Has the effect of clicking a button (or other element) on the current form. The
+first argument is the C<name> of the button to be clicked. The second and third
+arguments (optional) allow you to specify the (x,y) coordinates of the click.
 
 If there is only one button on the form, C<< $mech->click() >> with
 no arguments simply clicks that one button.
@@ -2356,6 +2364,9 @@ C<xpath> - Find the element to click by the XPath query
 
 C<dom> - Click on the passed DOM element
 
+You can use this to click on arbitrary page elements. There is no convenient
+way to pass x/y co-ordinates with this method.
+
 =item *
 
 C<id> - Click on the element with the given id
@@ -2363,7 +2374,7 @@ C<id> - Click on the element with the given id
 This is useful if your document ids contain characters that
 do look like CSS selectors. It is equivalent to
 
-    xpath => qq{//*[\@id="$id"}
+    xpath => qq{//*[\@id="$id"]}
 
 =item *
 
@@ -3164,7 +3175,9 @@ the field names are; you can just say
 
 and the first and second fields will be set accordingly. The method is
 called set_visible because it acts only on visible fields;
-hidden form inputs are not considered. 
+hidden form inputs are not considered. It also respects
+the respective return value of C<< ->is_visible() >> for each
+field, so hiding of fields through CSS affects this too.
 
 The specifiers that are possible in L<WWW::Mechanize> are not yet supported.
 
@@ -3175,14 +3188,22 @@ sub set_visible {
     my $form = $self->current_form;
     my @form;
     if ($form) { @form = (node => $form) };
-    my @visible_fields = $self->xpath(q{//input[not(@type) or (@type != "hidden" and @type!= "button" and @type!="submit")]}, 
+    my @visible_fields = $self->xpath(   q{//input[not(@type) or }
+                                       . q{(@type!= "hidden" and }
+                                       . q{ @type!= "button" and }
+                                       . q{ @type!= "submit" and }
+                                       . q{ @type!= "image")]}, 
                                       @form
                                       );
-    for my $idx (0..$#values) {
-        if ($idx > $#visible_fields) {
-            $self->signal_condition( "Not enough fields on page" );
-        }
-        $self->field( $visible_fields[ $idx ] => $values[ $idx ]);
+
+    @visible_fields = grep { $self->is_visible( $_ ) } @visible_fields;
+    
+    if (@values > @visible_fields) {
+        $self->signal_condition( "Not enough fields on page" );
+    } else {
+        for my $idx (0..$#values) {
+            $self->field( $visible_fields[ $idx ] => $values[ $idx ]);
+        };
     }
 }
 
@@ -3794,9 +3815,9 @@ L<http://perlmonks.org/>.
 
 I've given two talks about this module at Perl conferences:
 
-L<http://corion.net/talks/WWW-Mechanize-FireFox/www-mechanize-firefox.html|German Perl Workshop, German>
+L<German Perl Workshop, German|http://corion.net/talks/WWW-Mechanize-FireFox/www-mechanize-firefox.html>
 
-L<http://corion.net/talks/WWW-Mechanize-FireFox/www-mechanize-firefox.en.html|YAPC::Europe 2010, English>
+L<YAPC::Europe 2010, English|http://corion.net/talks/WWW-Mechanize-FireFox/www-mechanize-firefox.en.html>
 
 =head1 BUG TRACKER
 
