@@ -31,6 +31,7 @@ lib/WWW/Mechanize/Firefox/Cookbook.pod
 lib/WWW/Mechanize/Firefox/DSL.pm
 lib/WWW/Mechanize/Firefox/Examples.pm
 lib/WWW/Mechanize/Firefox/FAQ.pod
+lib/WWW/Mechanize/Firefox/Installation.pod
 lib/WWW/Mechanize/Firefox/Troubleshooting.pod
 Makefile.PL
 MANIFEST			This list of files
@@ -84,6 +85,8 @@ t/50-rt65615.t
 t/50-tick.html
 t/50-tick.t
 t/51-click_button.t
+t/51-click_js.html
+t/51-click_js.t
 t/51-empty-page.html
 t/51-form-number-blakew.html
 t/51-form-number-blakew.t
@@ -100,6 +103,7 @@ t/51-mech-set-content.t
 t/51-mech-submit.html
 t/51-mech-submit.t
 t/52-frame-document.t
+t/52-frame-event.t
 t/52-frameset-deep.html
 t/52-frameset-recursive.html
 t/52-frameset.html
