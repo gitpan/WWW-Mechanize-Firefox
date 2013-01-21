@@ -36,8 +36,6 @@ lib/WWW/Mechanize/Firefox/Troubleshooting.pod
 Makefile.PL
 MANIFEST			This list of files
 MANIFEST.skip
-MYMETA.json
-MYMETA.yml
 README
 README.mkdn
 t/00-load.t
@@ -61,6 +59,7 @@ t/50-form-with-fields.t
 t/50-form2.html
 t/50-form2.t
 t/50-form3.html
+t/50-load-and-load.t
 t/50-mech-activateTab.t
 t/50-mech-bufsize.t
 t/50-mech-closeTab.t
@@ -107,6 +106,7 @@ t/52-frame-event.t
 t/52-frameset-deep.html
 t/52-frameset-recursive.html
 t/52-frameset.html
+t/52-frameset-partly-404.html
 t/52-iframeset.html
 t/52-mech-api-find_link-frames.t
 t/52-mech-api-find_link.html

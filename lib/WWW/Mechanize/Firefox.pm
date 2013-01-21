@@ -18,7 +18,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.68';
+$VERSION = '0.69';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
              'MozRepl::RemoteObject::Instance'); # we trust these blindly
@@ -129,16 +129,16 @@ C<bufsize> - L<Net::Telnet> buffer size, if the default of 1MB is not enough
 =item * 
 
 C<events> - the set of default Javascript events to listen for while
-waiting for a reply
+waiting for a reply. In fact, WWW::Mechanize::Firefox will almost always
+wait until a 'DOMContentLoaded' or 'load' event. 'pagehide' events
+will tell it for what frames to wait.
 
 The default set is
 
-  DOMFrameContentLoaded
-  DOMContentLoaded
-  pageshow
-  error
-  abort
-  stop
+  'DOMContentLoaded','load', 
+  'pageshow',
+  'pagehide',
+  'error','abort','stop',
 
 =item * 
 
@@ -226,7 +226,12 @@ sub new {
     };
     if (! exists $args{ autodie }) { $args{ autodie } = 1 };
     
-    $args{ events } ||= [qw[DOMFrameContentLoaded DOMContentLoaded pageshow error abort stop]];
+    $args{ events } ||= [
+                      'DOMContentLoaded','load', 
+                      'pageshow', # Navigation from cache will use "pageshow"
+                      'pagehide',
+                      'error','abort','stop',
+    ];
     $args{ on_event } ||= undef;
     $args{ pre_value } ||= ['focus'];
     $args{ post_value } ||= ['change','blur'];
@@ -243,6 +248,8 @@ sub new {
     
     $args{ response } ||= undef;
     $args{ current_form } ||= undef;
+
+    $args{ event_log } ||= [];
     
     my $agent = delete $args{ agent };
     
@@ -306,6 +313,9 @@ sub autodie { $_[0]->{autodie} = $_[1] if @_ == 2; $_[0]->{autodie} }
 
 Sets or gets the set of Javascript events that WWW::Mechanize::Firefox
 will wait for after requesting a new page. Returns an array reference.
+
+Changing the set of events will most likely make WWW::Mechanize::Firefox
+stall while waiting for a response.
 
 This method is special to WWW::Mechanize::Firefox.
 
@@ -397,7 +407,7 @@ use vars '%known_options';
     'images'        => 'allowImages',
 );
 
-sub allow  {
+sub allow {
     my ($self,%options) = @_;
     my $shell = $self->docshell;
     for my $opt (sort keys %options) {
@@ -602,6 +612,74 @@ This method is special to WWW::Mechanize::Firefox.
 
 sub tab { $_[0]->{tab} };
 
+=head2 C<< $mech->make_progress_listener( %callbacks ) >>
+
+    my $eventlistener = $mech->progress_listener(
+        onStateChange => \&onStateChange,
+    );
+
+Creates an unconnected C<< nsIWebProgressListener >> interface
+which calls the Perl subroutines you pass in.
+
+Returns a handle. Once the handle gets released, all callbacks will
+get stopped. Also, all Perl callbacks will get deregistered from the
+Javascript bridge, so make sure not to use the same callback
+in different progress listeners at the same time.
+The sender may still call your callbacks.
+
+=cut
+
+sub make_progress_listener {
+    my ($mech,%handlers) = @_;
+    my $NOTIFY_STATE = $mech->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_STATE_ALL')
+                     + $mech->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_STATUS')
+                     ;
+    my ($obj) = $mech->repl->expr('new Object');
+    for my $key (keys %handlers) {
+        $obj->{$key} = $handlers{$key};
+    };
+    #warn "Listener created";
+    
+    my $mk_nsIWebProgressListener = $mech->repl->declare(<<'JS');
+    function (myListener) {
+        var callbacks = ["onStateChange",
+                       "onLocationChange",
+                       "onProgressChange",
+                       "onStatusChange",
+                       "onSecurityChange"
+                       // ,"onProgressChange64"
+                       // ,"onRefreshAttempted"
+        ];
+        for (var h in callbacks) {
+            var e = callbacks[h];
+            if (! myListener[e]) {
+                myListener[e] = function(){}
+            } else {
+                // alert("Setting callback for " + e);
+            };
+        };
+        myListener.QueryInterface = function(aIID) {
+            if (aIID.equals(Components.interfaces.nsIWebProgressListener) ||
+                // aIID.equals(Components.interfaces.nsIWebProgressListener2) ||
+                aIID.equals(Components.interfaces.nsISupportsWeakReference) ||
+                aIID.equals(Components.interfaces.nsISupports))
+                return this;
+            throw Components.results.NS_NOINTERFACE;
+        };
+        return myListener
+    }
+JS
+    
+    # Declare it here so we don't close over $lsn!
+    my $release = sub {
+        $_[0]->bridge->remove_callback(values %handlers);
+    };
+    my $lsn = $mk_nsIWebProgressListener->($obj);
+    $lsn->__on_destroy($release);
+    $lsn
+};
+
+
 =head2 C<< $mech->progress_listener( $source, %callbacks ) >>
 
     my $eventlistener = progress_listener(
@@ -612,6 +690,8 @@ sub tab { $_[0]->{tab} };
 Sets up the callbacks for the C<< nsIWebProgressListener >> interface
 to be the Perl subroutines you pass in.
 
+C< $source > needs to support C<.addProgressListener> and C<.removeProgressListener>.
+
 Returns a handle. Once the handle gets released, all callbacks will
 get stopped. Also, all Perl callbacks will get deregistered from the
 Javascript bridge, so make sure not to use the same callback
@@ -620,52 +700,16 @@ in different progress listeners at the same time.
 =cut
 
 sub progress_listener {
-    my ($mech,$source,%handlers) = @_;
-    my $NOTIFY_STATE_DOCUMENT = $mech->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_STATE_DOCUMENT');
-    my ($obj) = $mech->repl->expr('new Object');
-    for my $key (keys %handlers) {
-        $obj->{$key} = $handlers{$key};
-    };
-    #warn "Listener created";
+    my ($self,$source,%handlers) = @_;
     
-    my $mk_nsIWebProgressListener = $mech->repl->declare(<<'JS');
-    function (myListener,source) {
-        myListener.source = source;
-        var callbacks = ["onStateChange",
-                       "onLocationChange",
-                       "onProgressChange",
-                       "onStatusChange",
-                       "onSecurityChange",
-        ];
-        for (var h in callbacks) {
-            var e = callbacks[h];
-            if (! myListener[e]) {
-                myListener[e] = function(){}
-            };
-        };
-        myListener.QueryInterface = function(aIID) {
-            if (aIID.equals(Components.interfaces.nsIWebProgressListener) ||
-               aIID.equals(Components.interfaces.nsISupportsWeakReference) ||
-               aIID.equals(Components.interfaces.nsISupports))
-                return this;
-            throw Components.results.NS_NOINTERFACE;
-        };
-        return myListener
-    }
-JS
+    my $lsn = $self->make_progress_listener(%handlers);
+    $lsn->{source} = $source;
     
-    # Declare it here so we don't close over $lsn!
-    my $release = sub {
-        #warn "Listener removed";
-        $_[0]->bridge->remove_callback(values %handlers);
-    };
-    my $lsn = $mk_nsIWebProgressListener->($obj,$source);
-    $lsn->__release_action('self.source.removeProgressListener(self)');
-    $lsn->__on_destroy(sub {
-        # Clean up some memory leaks
-        $release->(@_)
-    });
-    $source->addProgressListener($lsn,$NOTIFY_STATE_DOCUMENT);
+    $lsn->__release_action('if(self.source)self.source.removeProgressListener(self)');
+    my $NOTIFY_STATE = $self->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_STATE_ALL')
+                     + $self->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_LOCATION')
+                     + $self->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_STATUS');
+    $source->addProgressListener($lsn,$NOTIFY_STATE);
     $lsn
 };
 
@@ -921,17 +965,128 @@ sub reset_headers {
     delete $self->{custom_header_observer};
 };
 
-# Should I port this to Perl?
-# Should this become part of MozRepl::RemoteObject?
-# This should get passed 
+sub _addLoadEventListener {
+    my ($self,%options) = @_;
+    
+    $options{ tab } ||= $self->tab;
+    $options{ window } ||= $self->application->getMostRecentWindow;
+    $options{ events } ||= $self->events;
+    my $add_load_listener = $self->repl->declare(<<'JS');
+        function( mainWindow, tab, waitForLoad, events ) {
+            var browser= mainWindow.gBrowser.getBrowserForTab( tab );
+
+            var lock= { 
+                        "busy": 1,
+                        "log":[],
+                        "events": events,
+                        "browser": browser,
+                        "cb": undefined,
+                        "release": function() {
+                            for(var i=0; i<this.events.length; i++) {
+                                this.browser.removeEventListener(this.events[i], this.cb, true);
+                            };
+                        }
+                      };
+            var unloadedFrames= [];
+            
+            lock.cb= function (e) {
+                var t= e.target;
+                var toplevel= (t == browser.contentDocument);
+                lock.log.push("Event "+e.type);
+                var reloadedFrame= false;
+                lock.log.push( "" + unloadedFrames.length + " frames.");
+                
+                if(    "FRAME"  == t.tagName
+                    || "IFRAME" == t.tagName ) {
+                    loc= t.src;
+                } else if( !t.tagName ) {
+                    // Document
+                    loc= t.URL;
+                } else { // ignore
+                    lock.log.push("Ignoring " + e.type + " on " + t.tagName);
+                };
+                try {
+                if( t instanceof HTMLDocument ) {
+                    // We are only interested in HTML pages here
+                        var container= t.defaultView.frameElement || browser.contentWindow;
+                        for( var i=0; i < unloadedFrames.length; i++ ) {
+                            try {
+                                // lock.log.push( "" + i + " " + unloadedFrames[i].id + " - " + unloadedFrames[i].src );
+                                reloadedFrame=    reloadedFrame
+                                               || unloadedFrames[i] === container;
+                            } catch (e) {
+                                // alert("Some frame element has gone away already...");
+                            };
+                            // alert("Caught " + e.type + " on remembered element. Great - " + reloadedFrame);
+                        };
+                
+                        if ("pagehide" == e.type && container ) {
+                            // alert("pagehide on container /lock"+lock.id);
+                            // A frame or window gets reloaded.
+                            // A frame gets reloaded. We remember it so we can
+                            // tell when it has completed. We won't get a separate
+                            // completion event on the parent document :-(
+                            lock.log.push("Remembering frame parent, for 'load' event");
+                            unloadedFrames.push( container );
+                            // Maybe we should just attach all events here?!
+                        };
+                };
+            } catch (e) { alert("Error while looking: " + e.message+" " + e.line) };
+                
+                // if (! toplevel && !reloadedFrame ) { return ; };
+                lock.log.push("<> " + e.type + " on " + loc);
+                
+                if(    (reloadedFrame)
+                    // && !waitForLoad
+                    && "DOMContentLoaded" == e.type
+                    ) {
+                    // We loaded a document
+                    // See if it contains (i)frames
+                    // and wait for "load" to fire if so
+                    // alert("Reloaded a container /lock:" + lock.id);
+                    lock.log.push("DOMContentLoaded for toplevel");
+                    var q= "//IFRAME|//FRAME";
+                    var frames= t.evaluate(q,t,null,XPathResult.ORDERED_NODE_SNAPSHOT_TYPE, null ).snapshotLength;
+                    lock.log.push("Found " + frames + " frames");
+                    if( frames ) {
+                        lock.log.push("Waiting for 'load' because we found frames");
+                        waitForLoad= true;
+                    } else if( /^about:neterror\?/.test( loc ) || !waitForLoad ) {
+                        lock.log.push("Early out on DOMContentLoaded");
+                        lock.busy= 0;
+                    };
+
+                } else if( (reloadedFrame)
+                    && (   "load" == e.type 
+                        || "pageshow" == e.type
+                        )) { // We always are done on "load" on toplevel
+                    lock.log.push("'" + e.type + "' on top level, old state was " + lock.busy);
+                    lock.busy= 0;
+
+                } else if( (toplevel || reloadedFrame)
+                    && ("error" == e.type || "stop" == e.type)) { // We always are done on "load" on toplevel
+                    lock.log.push("'" + e.type + "' on top level, old state was " + lock.busy);
+                    lock.busy= 0;
+                };
+                
+            };
+            
+            for(var i=0; i<events.length; i++) {
+                browser.addEventListener(events[i], lock.cb, true);
+            };
+            lock.log.push("Listening");
+            
+            return lock
+        }
+JS
+    return $add_load_listener->($options{ window }, $options{ tab }, 1, $options{ events } );
+}
+
 sub _addEventListener {
     my ($self,@args) = @_;
     if (@args <= 2 and ref($args[0]) eq 'MozRepl::RemoteObject::Instance') {
         @args = [@args];
     };
-    #use Data::Dumper;
-    #local $Data::Dumper::Maxdepth = 2;
-    #print Dumper \@args;
     for (@args) {
         $_->[1] ||= $self->events;
         $_->[1] = [$_->[1]]
@@ -986,13 +1141,28 @@ sub _wait_while_busy {
     # Now do the busy-wait
     # Should this also include a ->poll()
     # and a callback?
+
     while (1) {
         for my $element (@elements) {
-            if ((my $s = $element->{busy} || 0) >= 1) {
+            if ((my $s = $element->{busy} || 0) < 1) {
+                for my $element (@elements) {
+                    push @{ $self->{event_log} }, 
+                        join "\n", @{ $element->{log}};
+                };
                 return $element;
             };
         };
         sleep 0.1;
+        
+#        if (time-$timer > 4) {
+#            $timer= time;
+#            for my $element (@elements) {
+#                for (@{ $element->{log}}) {
+#                    print $_,"\n";
+#                };
+#                print "---\n";
+#            };
+#        };
     };
 }
 
@@ -1022,7 +1192,6 @@ event instead.
 If you leave out C<$event>, the value of C<< ->events() >> will
 be used instead.
 
-
 =cut
 
 sub _install_response_header_listener {
@@ -1033,13 +1202,33 @@ sub _install_response_header_listener {
     # Pre-Filter the progress on the JS side of things so we
     # don't get that much traffic back and forth between Perl and JS
     my $make_state_change_filter = $self->repl->declare(<<'JS');
-        function (cb) {
+        function (cb,console) {
+            const STATE_START = Components.interfaces.nsIWebProgressListener.STATE_START;
             const STATE_STOP = Components.interfaces.nsIWebProgressListener.STATE_STOP;
+            const STATE_TRANSFERRING = Components.interfaces.nsIWebProgressListener.STATE_TRANSFERRING;
             const STATE_IS_DOCUMENT = Components.interfaces.nsIWebProgressListener.STATE_IS_DOCUMENT;
             const STATE_IS_WINDOW = Components.interfaces.nsIWebProgressListener.STATE_IS_WINDOW;
             
             return function (progress,request,flags,status) {
+                if( 0 && console ) {
+                    const nsIChannel = Components.interfaces.nsIChannel;
+                    var ch = request.QueryInterface(nsIChannel);
+                    
+                    console.log("STATE: "
+                                + (flags & STATE_START ? "s" : "-")
+                                + (flags & STATE_STOP ? "S" : "-")
+                                + (flags & STATE_TRANSFERRING ? "T" : "-")
+                                + (flags & STATE_IS_DOCUMENT ? "D" : "-")
+                                + (flags & STATE_IS_WINDOW ? "W" : "-")
+                                + " " + status
+                                + " " + ch.originalURI.spec
+                                + " -> " + ch.URI.spec
+                                );
+                };
+                // if (flags & (STATE_STOP|STATE_IS_WINDOW) == (STATE_STOP|STATE_IS_WINDOW)) {
                 if (flags & (STATE_STOP|STATE_IS_DOCUMENT) == (STATE_STOP|STATE_IS_DOCUMENT)) {
+                    cb(progress,request,flags,status);
+                } else if ((flags & STATE_STOP) == STATE_STOP) {
                     cb(progress,request,flags,status);
                 }
             }
@@ -1053,12 +1242,12 @@ JS
     
     my $state_change = $make_state_change_filter->(sub {
         my ($progress,$request,$flags,$status) = @_;
-        #warn sprintf "State     : <progress> <request> %08x %08x\n", $flags, $status;
-        #warn sprintf "                                 %08x\n", $STATE_STOP | $STATE_IS_DOCUMENT;
-        #warn "".$request->{URI}->{asciiSpec};
+        #warn sprintf "State     : <progress> <request> %032b %08x\n", $flags, $status;
+        #warn sprintf "                                 %032b\n", $STATE_STOP | $STATE_IS_DOCUMENT | $STATE_IS_WINDOW ;
         
-        if (($flags & ($STATE_STOP | $STATE_IS_DOCUMENT)) == ($STATE_STOP | $STATE_IS_DOCUMENT)) {
-            if ($status == 0) {
+        if (   $STATE_STOP == $flags # some error
+            or ($flags & ($STATE_STOP | $STATE_IS_DOCUMENT)) == ($STATE_STOP | $STATE_IS_DOCUMENT)) {
+            if ($status == 0 ) {
                 #warn "Storing request to response";
                 #warn "URI ".$request->{URI}->{asciiSpec};
                 $self->{ response } ||= $request;
@@ -1066,11 +1255,9 @@ JS
                 #warn "Erasing response";
                 undef $self->{ response };
             };
-            #if ($status) {
-            #    warn sprintf "%08x", $status;
-            #};
         };
-    });
+    #}, $self->tab->{linkedBrowser}->{contentWindow}->{console}, $lock);
+    }, $self->tab->{linkedBrowser}->{contentWindow}->{console});
 
     my $browser = $self->tab->{linkedBrowser};
 
@@ -1099,11 +1286,9 @@ sub synchronize {
     my $need_response = defined wantarray;
     my $response_catcher = $self->_install_response_header_listener();
     
-    # 'load' on linkedBrowser is good for successfull load
-    # 'error' on tab is good for failed load :-(
-    my $b = $self->tab->{linkedBrowser};
-    my $load_lock = $self->_addEventListener([$b,$events],[$self->tab,$events]);
+    my $load_lock = $self->_addLoadEventListener( tab => $self->tab, events => $events );
     $callback->();
+    
     my $ev = $self->_wait_while_busy($load_lock);
     if (my $h = $self->{on_event}) {
         if (ref $h eq 'CODE') {
@@ -1114,6 +1299,12 @@ sub synchronize {
         };
     };
     
+    # Clean up our event listener
+    $load_lock->release;
+    
+    undef $response_catcher;
+    # Response catcher gets released here
+
     $self->signal_http_status;
     if ($need_response) {
         return $self->response
@@ -1179,7 +1370,7 @@ sub response {
         if ($ouri) {
             $scheme = $ouri->{scheme};
         };
-    
+
         if ($scheme and $scheme =~ /^https?/) {
             # We can only extract from a HTTP Response
             return $self->_extract_response( $js_res, %options );
@@ -1353,7 +1544,8 @@ This is WWW::Mechanize::Firefox specific.
 
 sub document {
     my ($self) = @_;
-    $self->tab->MozRepl::RemoteObject::Methods::dive(qw[linkedBrowser contentWindow document]);
+    #$self->tab->MozRepl::RemoteObject::Methods::dive(qw[linkedBrowser contentWindow document]);
+    $self->tab->MozRepl::RemoteObject::Methods::dive(qw[linkedBrowser contentDocument]);
 }
 
 =head2 C<< $mech->docshell() >>
@@ -1589,17 +1781,19 @@ Saves the given URL to the given filename. The URL will be
 fetched from the cache if possible, avoiding unnecessary network
 traffic.
 
-Returns a C<nsIWebBrowserPersist> object through which you can cancel the
-download by calling its C<< ->cancelSave >> method. Also, you can poll
-the download status through the C<< ->{currentState} >> property.
-
 If you are interested in the intermediate download progress, create
 a ProgressListener through C<< $mech->progress_listener >>
 and pass it in the C<progress> option.
-
 The download will
 continue in the background. It will also not show up in the
 Download Manager.
+
+If the C<progress> option is not passed in, C< ->save_url >
+will only return after the download has finished.
+
+Returns a C<nsIWebBrowserPersist> object through which you can cancel the
+download by calling its C<< ->cancelSave >> method. Also, you can poll
+the download status through the C<< ->{currentState} >> property.
 
 =cut
 
@@ -1613,8 +1807,26 @@ sub save_url {
     	    or die "Couldn't create '$localname': $!";
     };
     
+    my $res;
+    if( ! $options{ progress }) {
+        $options{ wait } = 1;
+        # We will do a synchronous download
+        my $STATE_FINISHED = $self->repl->constant('Components.interfaces.nsIWebBrowserPersist.PERSIST_STATE_FINISHED');
+        $options{ progress }= $self->make_progress_listener(onStateChange => sub {
+            my ($webprogress,$request,$flags,$status) = @_;
+            if( $res->{currentState} == $STATE_FINISHED) {
+                $options{ wait }= 0;
+            };
+        },
+        # onProgressChange => sub {
+        #    my ($aWebProgress, $aRequest, $aCurSelfProgress, $aMaxSelfProgress, $aCurTotalProgress, $aMaxTotalProgress)= @_;
+            #diag sprintf "%03.2f", $aCurTotalProgress / ($aMaxTotalProgress||1) * 100;
+        #}
+        );
+    };
+    
     my $transfer_file = $self->repl->declare(<<'JS');
-function (source,filetarget,progress) {
+function (source,filetarget,progress,tab) {
     //new obj_URI object
     var obj_URI = Components.classes["@mozilla.org/network/io-service;1"]
         .getService(Components.interfaces.nsIIOService).newURI(source, null, null);
@@ -1629,7 +1841,7 @@ function (source,filetarget,progress) {
     //set file with path
     obj_target.initWithPath(filetarget);
 
-    //new persitence object
+    //new persistence object
     var obj_Persist = Components.classes["@mozilla.org/embedding/browser/nsWebBrowserPersist;1"]
         .createInstance(Components.interfaces.nsIWebBrowserPersist);
 
@@ -1644,13 +1856,56 @@ function (source,filetarget,progress) {
                                      | nsIWBP["PERSIST_FLAGS_FORCE_ALLOW_COOKIES"]
                                      ;
     obj_Persist.progressListener = progress;
+    /* {
+        "onStateChange": function() {
+            var myargs= Array.slice(arguments);
+            alert("onStateChange (" + myargs.join(",")+")");
+            try {
+                progress.onStateChange.apply(null,arguments);
+            } catch(e) {
+                alert(e.message);
+            };
+        },
+        "onProgressChange": function() {
+            var myargs= Array.slice(arguments);
+            alert("onProgressChange (" + myargs.join(",")+")");
+            try {
+                progress.onProgressChange.apply(null,arguments);
+            } catch(e) {
+                alert(e.message);
+            };
+        }
+    };
+    */
+    
+    // Since Firefox 18, we need to provide a proper privacyContext
+    // This is cobbled together from half-documented parts in various places
+    // of the Mozilla documentation. The changes file does not list the
+    // necessary steps :-(
+    // https://developer.mozilla.org/en-US/docs/Supporting_per-window_private_browsing
+    // The documentation is even wrong. It recommends to import("chrome://gre/modules/PrivateBrowsingUtils.jsm")
+    // but the correct URL is "resource://gre/modules/PrivateBrowsingUtils.jsm".
+    // Also, the method is not named "getPrivacyContextFromWindow" but "privacyContextFromWindow".
+    var privacyContext;
+    var version = Components.classes["@mozilla.org/xre/app-info;1"]
+                  .getService(Components.interfaces.nsIXULAppInfo).version;
+    if( version >= 18.0 ) {
+        Components.utils.import("resource://gre/modules/PrivateBrowsingUtils.jsm");
+        privacyContext = PrivateBrowsingUtils.privacyContextFromWindow(tab.linkedBrowser.contentDocument.defaultView);
+    };
 
     //save file to target
-    obj_Persist.saveURI(obj_URI,null,null,null,null,obj_target);
+    obj_Persist.saveURI(obj_URI,null,null,null,null,obj_target,privacyContext);
     return obj_Persist
 };
 JS
-    $transfer_file->("$url" => $localname, $options{progress});
+    $res= $transfer_file->("$url" => $localname, $options{progress}, $self->tab);
+    while( $options{ wait }) {
+        $self->repl->poll;
+        sleep 1
+            if $options{ wait };
+    };
+    $res
 }
 
 =head2 C<< $mech->base() >>

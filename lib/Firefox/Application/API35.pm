@@ -2,7 +2,7 @@ package Firefox::Application::API35;
 use strict;
 use parent 'Firefox::Application';
 use vars qw($VERSION);
-$VERSION = '0.68';
+$VERSION = '0.69';
 
 =head1 NAME
 
@@ -144,8 +144,9 @@ function() {
     
     var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
                        .getService(Components.interfaces.nsIWindowMediator);
-    var win = wm.getMostRecentWindow('navigator:browser');
-    if (win) {
+    var en = wm.getEnumerator('navigator:browser');
+    while( en.hasMoreElements() ) {
+        var win= en.getNext();
         var browser = win.getBrowser();
         Array.prototype.forEach.call(
             browser.tabContainer.childNodes, 

@@ -6,7 +6,7 @@ use URI ();
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.68';
+$VERSION = '0.69';
 
 =head1 NAME
 
@@ -383,6 +383,24 @@ sub browser {
         // return win.getBrowser()
     }
 JS
+};
+
+=head2 C<< $ff->getMostRecentWindow >>
+
+Returns the most recently used Firefox window.
+
+=cut
+
+sub getMostRecentWindow {
+    my ($self) = @_;
+    my $get = $self->repl->declare(<<'JS');
+    function() {
+        var wm = Components.classes["@mozilla.org/appshell/window-mediator;1"]
+                           .getService(Components.interfaces.nsIWindowMediator);
+        return wm.getMostRecentWindow('navigator:browser');
+    }
+JS
+    return $get->()
 };
 
 =head2 C<< $ff->set_tab_content( $tab, $html [,$repl] ) >>
