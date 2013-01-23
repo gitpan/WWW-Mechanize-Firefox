@@ -18,10 +18,11 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.69';
+$VERSION = '0.70';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
-             'MozRepl::RemoteObject::Instance'); # we trust these blindly
+             'MozRepl::RemoteObject::Instance'
+             ); # we trust these blindly
 
 =head1 NAME
 
@@ -2779,7 +2780,7 @@ sub click_button {
         $user_message = "Button name '$v' unknown";
     } elsif (exists $options{ number }) {
         my $v = delete $options{ number };
-        $xpath = sprintf '//*[translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz") = "button" or (local-name() = "input" and @type="submit")][%s]', $v;
+        $xpath = sprintf '//*[translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz") = "button" or (translate(local-name(.), "ABCDEFGHIJKLMNOPQRSTUVWXYZ", "abcdefghijklmnopqrstuvwxyz") = "input" and @type="submit")][%s]', $v;
         $user_message = "Button number '$v' out of range";
     };
     #warn $xpath;
@@ -3529,6 +3530,13 @@ sub is_visible {
         while (obj) {
             // No object
             if (!obj) return false;
+            
+            try {
+                if( obj["parentNode"] ) 1;
+            } catch (e) {
+                // Dead object
+                return false
+            };
             // Descends from document, so we're done
             if (obj.parentNode === obj.ownerDocument) {
                 return true;
