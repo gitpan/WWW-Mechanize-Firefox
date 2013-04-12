@@ -18,7 +18,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.71';
+$VERSION = '0.72';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
              'MozRepl::RemoteObject::Instance'
@@ -706,7 +706,7 @@ sub progress_listener {
     my $lsn = $self->make_progress_listener(%handlers);
     $lsn->{source} = $source;
     
-    $lsn->__release_action('if(self.source)self.source.removeProgressListener(self)');
+    $lsn->__release_action('if(self.source)try{self.source.removeProgressListener(self)}catch(e){}');
     my $NOTIFY_STATE = $self->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_STATE_ALL')
                      + $self->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_LOCATION')
                      + $self->repl->constant('Components.interfaces.nsIWebProgress.NOTIFY_STATUS');
