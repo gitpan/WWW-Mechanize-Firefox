@@ -13,12 +13,13 @@ use Firefox::Application;
 use MozRepl::RemoteObject ();
 use MozRepl::RemoteObject::Methods ();
 use HTTP::Cookies::MozRepl ();
+use HTTP::Request::Common ();
 use Scalar::Util qw'blessed weaken';
 use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.72';
+$VERSION = '0.73';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
              'MozRepl::RemoteObject::Instance'
@@ -851,6 +852,100 @@ sub get_local {
     $self->get("file://$fn", %options);
 }
 
+=head2 C<< $mech->post( $url, %options ) >>
+
+  $mech->post( 'http://example.com',
+      params => { param => "Hello World" },
+      headers => {
+        "Content-Type" => 'application/x-www-form-urlencoded',
+      },
+      charset => 'utf-8',
+  );
+
+Sends a POST request to C<$url>.
+
+A C<Content-Length> header will be automatically calculated if
+it is not given.
+
+The following options are recognized:
+
+=over 4
+
+=item *
+
+C<headers> - a hash of HTTP headers to send. If not given,
+the content type will be generated automatically.
+
+=item *
+
+C<data> - the raw data to send, if you've encoded it already.
+
+=back
+
+=cut
+
+sub post {
+    my ($self, $url, %options) = @_;
+    my $b = $self->tab->{linkedBrowser};
+    $self->clear_current_form;
+
+    my $flags = 0;
+    if ($options{no_cache}) {
+      $flags = $self->repl->constant('nsIWebNavigation.LOAD_FLAGS_BYPASS_CACHE');
+    };
+    if (! exists $options{synchronize}) {
+      $options{synchronize} = $self->events;
+    };
+    if( !ref $options{synchronize}) {
+      $options{synchronize} = $options{synchronize}
+                              ? $self->events
+                              : []
+    };
+
+    # If we don't have data, encode the parameters:
+    if( !$options{ data }) {
+        my $req= HTTP::Request::Common::POST( $url, $options{params} );
+        warn $req->content;
+        $options{ data } = $req->content;
+    };
+
+    $options{ charset } ||= 'utf-8';
+    $options{ headers } ||= {};
+    $options{ headers }->{"Content-Type"} ||= "application/x-www-form-urlencoded";
+    if( $options{ charset }) {
+        $options{ headers }->{"Content-Type"} .= "; charset=$options{ charset }";
+    };
+
+    my $streamPostData = $self->repl->declare(<<'JS');
+      function(headers, dataString) {
+        // POST method requests must wrap the encoded text in a MIME stream
+        const Cc = Components.classes;
+        const Ci = Components.interfaces;
+        var stringStream = Cc["@mozilla.org/io/string-input-stream;1"].
+                           createInstance(Ci.nsIStringInputStream);
+        if ("data" in stringStream) // Gecko 1.9 or newer
+          stringStream.data = dataString;
+        else // 1.8 or older
+          stringStream.setData(dataString, dataString.length);
+
+        var postData = Cc["@mozilla.org/network/mime-input-stream;1"].
+                       createInstance(Ci.nsIMIMEInputStream);
+        for( h in headers ) {
+            postData.addHeader( h, headers[h] );
+        };
+        postData.addContentLength = true;
+        postData.setData(stringStream);
+
+        return postData;
+      }
+JS
+
+    $self->_sync_call($options{synchronize}, sub {
+      my $postData = $streamPostData->($options{headers}, $options{data});
+      $b->loadURIWithFlags(''.$url, $flags, undef, $options{charset}, $postData);
+    });
+}
+
 =head2 C<< $mech->add_header( $name => $value, ... ) >>
 
     $mech->add_header(
@@ -864,6 +959,8 @@ request that Firefox makes.
 Using multiple instances of WWW::Mechanize::Firefox objects with the same
 application together with changed request headers will most likely have weird
 effects. So don't do that.
+
+Note that currently, we only support one value per header.
 
 =cut
 
@@ -4006,10 +4103,6 @@ C<< ->put >>
 I have no use for it
 
 =item *
-
-C<< ->post >>
-
-I have no use for it
 
 =back
 

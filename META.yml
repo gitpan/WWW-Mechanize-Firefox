@@ -24,6 +24,7 @@ requires:
   HTTP::Cookies: 0
   HTTP::Daemon: 0
   HTTP::Date: 0
+  HTTP::Request::Common: 0
   HTTP::Response: 0
   LWP::Simple: 0
   MIME::Base64: 0
@@ -39,4 +40,4 @@ requires:
   perl: 5.006
 resources:
   repository: http://github.com/Corion/www-mechanize-firefox
-version: 0.72
+version: 0.73
