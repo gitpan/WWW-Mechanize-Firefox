@@ -6,7 +6,7 @@ use URI ();
 use Carp qw(carp croak);
 
 use vars qw'$VERSION';
-$VERSION = '0.73';
+$VERSION = '0.74';
 
 =head1 NAME
 
@@ -473,7 +473,7 @@ Max Maischein C<corion@cpan.org>
 
 =head1 COPYRIGHT (c)
 
-Copyright 2009-2012 by Max Maischein C<corion@cpan.org>.
+Copyright 2009-2013 by Max Maischein C<corion@cpan.org>.
 
 =head1 LICENSE
 
