@@ -3,7 +3,7 @@ use strict;
 use parent 'Firefox::Application';
 use Firefox::Application::API35;
 use vars qw($VERSION);
-$VERSION = '0.74';
+$VERSION = '0.75';
 
 =head1 NAME
 
@@ -102,7 +102,7 @@ Max Maischein C<corion@cpan.org>
 
 =head1 COPYRIGHT (c)
 
-Copyright 2009-2013 by Max Maischein C<corion@cpan.org>.
+Copyright 2009-2014 by Max Maischein C<corion@cpan.org>.
 
 =head1 LICENSE
 

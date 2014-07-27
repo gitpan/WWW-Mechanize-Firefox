@@ -4,7 +4,7 @@ use Carp qw(carp);
 use WWW::Mechanize::Firefox;
 use parent 'HTML::Display::Common';
 use vars qw($VERSION);
-$VERSION = '0.74';
+$VERSION = '0.75';
 
 =head1 NAME
 
@@ -50,7 +50,7 @@ L<http://github.com/Corion/www-mechanize-firefox>.
 
 =head1 AUTHOR
 
-Copyright (c) 2009-2013 Max Maischein C<< <corion@cpan.org> >>
+Copyright (c) 2009-2014 Max Maischein C<< <corion@cpan.org> >>
 
 =head1 LICENSE
 

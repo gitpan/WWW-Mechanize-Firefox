@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.74';
+$VERSION = '0.75';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
              'MozRepl::RemoteObject::Instance'
@@ -275,7 +275,6 @@ sub DESTROY {
         # as the last thing, now:
         $app = undef;
     };
-    #warn "FF cleaned up";
 }
 
 =head2 C<< $mech->agent( $product_id ); >>
@@ -1802,11 +1801,11 @@ the download status through the C<< ->{currentState} >> property.
 If you need to set persist flags pass the unsigned long value in the
 C<persist> option.
 
-$mech->get('http://zombisoft.com');
-$mech->save_content('Zombisoft','zombisoft-resource-files', "persist" => 512 | 2048);
+    $mech->get('http://zombisoft.com');
+    $mech->save_content('Zombisoft','zombisoft-resource-files', "persist" => 512 | 2048);
 
 A list of flags and their values can be found at 
-https://developer.mozilla.org/en-US/docs/XPCOM_Interface_Reference/nsIWebBrowserPersist 
+L<https://developer.mozilla.org/en-US/docs/XPCOM_Interface_Reference/nsIWebBrowserPersist >
 
 If you are interested in the intermediate download progress, create
 a ProgressListener through C<< $mech->progress_listener >>
@@ -2390,7 +2389,7 @@ sub find_link_dom {
 =head2 C<< $mech->find_link( %options ) >>
 
   print $_->text . "\n"
-      for $mech->find_link_dom( text_contains => 'CPAN' );
+      for $mech->find_link( text_contains => 'CPAN' );
 
 A method quite similar to L<WWW::Mechanize>'s method.
 The options are documented in C<< ->find_link_dom >>.
@@ -2416,7 +2415,7 @@ sub find_link {
 =head2 C<< $mech->find_all_links( %options ) >>
 
   print $_->text . "\n"
-      for $mech->find_link_dom( text_regex => qr/google/i );
+      for $mech->find_all_links( text_regex => qr/google/i );
 
 Finds all links in the document.
 The options are documented in C<< ->find_link_dom >>.
@@ -2442,7 +2441,7 @@ sub find_all_links {
 =head2 C<< $mech->find_all_links_dom %options >>
 
   print $_->{innerHTML} . "\n"
-      for $mech->find_link_dom( text_regex => qr/google/i );
+      for $mech->find_all_links_dom( text_regex => qr/google/i );
 
 Finds all matching linky DOM nodes in the document.
 The options are documented in C<< ->find_link_dom >>.
@@ -2632,10 +2631,12 @@ sub xpath {
     );
 
     if (! $zero_allowed and @res == 0) {
+        $options{ user_info } ||= $query;
         $self->signal_condition( "No elements found for $options{ user_info }" );
     };
 
     if (! $two_allowed and @res > 1) {
+        $options{ user_info } ||= $query;
         $self->highlight_node(@res);
         $self->signal_condition( (scalar @res) . " elements found for $options{ user_info }" );
     };
@@ -3297,6 +3298,7 @@ with a different API. Supported keys are:
   pre
   post
   name
+  node
   value
 
 in addition to all keys that C<< $mech->xpath >> supports.
@@ -3528,7 +3530,7 @@ sub tick {
     };
     
     my $target = $boxes[0];
-    my $is_set = $target->{checked} eq 'true';
+    my $is_set = $self->application->bool_ff_to_perl( $target->{checked} );
     if ($set xor $is_set) {
         if ($set) {
             $target->{checked}= 'checked';
@@ -4133,7 +4135,7 @@ sub element_as_png {
 
     my $shiny = $mech->selector('#shiny', single => 1);
     my ($pos) = $mech->element_coordinates($shiny);
-    print $pos->{x},',', $pos->{y};
+    print $pos->{left},',', $pos->{top};
 
 Returns the page-coordinates of the C<$element>
 in pixels as a hash with four entries, C<left>, C<top>, C<width> and C<height>.
