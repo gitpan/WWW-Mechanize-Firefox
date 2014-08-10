@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.75';
+$VERSION = '0.76';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
              'MozRepl::RemoteObject::Instance'
@@ -1805,7 +1805,7 @@ C<persist> option.
     $mech->save_content('Zombisoft','zombisoft-resource-files', "persist" => 512 | 2048);
 
 A list of flags and their values can be found at 
-L<https://developer.mozilla.org/en-US/docs/XPCOM_Interface_Reference/nsIWebBrowserPersist >
+L<https://developer.mozilla.org/en-US/docs/XPCOM_Interface_Reference/nsIWebBrowserPersist>.
 
 If you are interested in the intermediate download progress, create
 a ProgressListener through C<< $mech->progress_listener >>
