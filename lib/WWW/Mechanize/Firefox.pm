@@ -19,7 +19,7 @@ use Encode qw(encode decode);
 use Carp qw(carp croak );
 
 use vars qw'$VERSION %link_spec @CARP_NOT';
-$VERSION = '0.76';
+$VERSION = '0.77';
 @CARP_NOT = ('MozRepl::RemoteObject',
              'MozRepl::AnyEvent',
              'MozRepl::RemoteObject::Instance'
@@ -963,6 +963,11 @@ application together with changed request headers will most likely have weird
 effects. So don't do that.
 
 Note that currently, we only support one value per header.
+
+Some versions of Firefox don't work with the method that is used to set
+the custom headers. Please see C<t/60-mech-custom-headers.t> for the exact
+versions where the implemented mechanism doesn't work. Roughly, this is
+for versions 17 to 24 of Firefox.
 
 =cut
 
@@ -2935,6 +2940,10 @@ As a deviation from the WWW::Mechanize API, you can also pass a
 hash reference as the first parameter. In it, you can specify
 the parameters to search much like for the C<find_link> calls.
 
+Note: Currently, clicking on images with the C<ismap> attribute
+does not trigger the move to the new URL. A workaround is to program
+the new URL into your script.
+
 =cut
 
 sub click {
@@ -2981,7 +2990,7 @@ sub click {
         
     $self->_sync_call(
         $options{ synchronize }, sub { # ,'abort'
-            $buttons[0]->__click();
+            $buttons[0]->__click($x,$y);
         }
     );
 

@@ -381,6 +381,11 @@ NAVIGATION METHODS
 
     Note that currently, we only support one value per header.
 
+    Some versions of Firefox don't work with the method that is used to set
+    the custom headers. Please see `t/60-mech-custom-headers.t' for the
+    exact versions where the implemented mechanism doesn't work. Roughly,
+    this is for versions 17 to 24 of Firefox.
+
   `$mech->delete_header( $name , $name2... )'
         $mech->delete_header( 'User-Agent' );
     
@@ -867,6 +872,10 @@ EXTRACTION METHODS
     As a deviation from the WWW::Mechanize API, you can also pass a hash
     reference as the first parameter. In it, you can specify the parameters
     to search much like for the `find_link' calls.
+
+    Note: Currently, clicking on images with the `ismap' attribute does not
+    trigger the move to the new URL. A workaround is to program the new URL
+    into your script.
 
   `$mech->click_button( ... )'
       $mech->click_button( name => 'go' );
