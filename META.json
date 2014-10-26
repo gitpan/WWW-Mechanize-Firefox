@@ -42,7 +42,7 @@
             "HTTP::Response" : "0",
             "LWP::Simple" : "0",
             "MIME::Base64" : "0",
-            "MozRepl::RemoteObject" : "0.38",
+            "MozRepl::RemoteObject" : "0.39",
             "Object::Import" : "0",
             "Scalar::Util" : "1.14",
             "Shell::Command" : "0",
@@ -61,5 +61,5 @@
          "url" : "http://github.com/Corion/www-mechanize-firefox"
       }
    },
-   "version" : "0.77"
+   "version" : "0.78"
 }
